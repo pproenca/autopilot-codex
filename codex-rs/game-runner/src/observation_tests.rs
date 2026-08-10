@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use codex_core_api::CallToolResult;
@@ -17,12 +18,21 @@ use serde_json::json;
 use super::ModelObservation;
 use super::ObservationAccumulator;
 use super::ObservationReport;
+use crate::DecisionGate;
 use crate::GameCallPolicy;
 use crate::RunnerError;
 
+fn policy() -> GameCallPolicy {
+    GameCallPolicy::new(
+        "test-epoch".to_string(),
+        1,
+        Arc::new(DecisionGate::new(1)),
+    )
+}
+
 #[test]
 fn newest_successful_observation_is_correlated_with_the_model_report() {
-    let policy = GameCallPolicy::new("test-epoch".to_string(), 1);
+    let policy = policy();
     let mut accumulator = ObservationAccumulator::default();
     for event in [
         turn_started(),
@@ -63,7 +73,7 @@ fn newest_successful_observation_is_correlated_with_the_model_report() {
 
 #[test]
 fn completion_without_successful_observation_is_rejected() {
-    let policy = GameCallPolicy::new("test-epoch".to_string(), 1);
+    let policy = policy();
     let mut accumulator = ObservationAccumulator::default();
     accumulator.observe(&turn_started());
     accumulator.observe(&observation_end("failed", "ignored", false));
@@ -82,7 +92,7 @@ fn completion_without_successful_observation_is_rejected() {
 
 #[test]
 fn invalid_or_unbounded_model_reports_are_rejected() {
-    let policy = GameCallPolicy::new("test-epoch".to_string(), 1);
+    let policy = policy();
     let oversized = "x".repeat(2_049);
     let too_many = vec!["object"; 33];
     for message in [
@@ -130,7 +140,7 @@ fn invalid_or_unbounded_model_reports_are_rejected() {
 
 #[tokio::test]
 async fn pre_policy_mutation_begin_is_an_attempt_not_a_dispatch() {
-    let policy = GameCallPolicy::new("test-epoch".to_string(), 1);
+    let policy = policy();
     let request_meta = serde_json::Map::new();
     let _decision = policy
         .evaluate(McpToolCallPolicyInput {

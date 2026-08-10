@@ -15,6 +15,7 @@ use codex_core_api::McpServerConfig;
 use codex_core_api::WebSearchMode;
 use codex_game_runner::GAME_SERVER_NAME;
 use codex_game_runner::GENERATION;
+use codex_game_runner::DecisionGate;
 use codex_game_runner::GameCallPolicy;
 use codex_game_runner::ModelObservation;
 use codex_game_runner::ObservationLimits;
@@ -94,11 +95,16 @@ for (const content of result.content || []) {
         "command": game_runner_bin,
         "args": ["__stdio-to-uds", socket_path],
         "required": true,
-        "enabled_tools": ["get_app_state", "wait", "zoom"],
+        "enabled_tools": ["get_app_state", "wait", "click", "drag", "focus_click"],
         "startup_timeout_sec": 15,
         "tool_timeout_sec": 5,
     }))?;
-    let policy = Arc::new(GameCallPolicy::new("test-epoch".to_string(), GENERATION));
+    let gate = Arc::new(DecisionGate::new(GENERATION));
+    let policy = Arc::new(GameCallPolicy::new(
+        "test-epoch".to_string(),
+        GENERATION,
+        gate,
+    ));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.mcp_tool_call_policy_contributor(policy.clone());
     let fixture = test_codex()

@@ -31,6 +31,7 @@ use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
 use codex_game_runner::GENERATION;
+use codex_game_runner::DecisionGate;
 use codex_game_runner::GameCallPolicy;
 use codex_game_runner::HelperLauncher;
 use codex_game_runner::ObservationLimits;
@@ -142,7 +143,12 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<Observati
         .context("resolve installation identity")
         .map_err(thread_startup_error)?;
 
-    let policy = Arc::new(GameCallPolicy::new(Uuid::new_v4().to_string(), GENERATION));
+    let gate = Arc::new(DecisionGate::new(GENERATION));
+    let policy = Arc::new(GameCallPolicy::new(
+        Uuid::new_v4().to_string(),
+        GENERATION,
+        gate,
+    ));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.mcp_tool_call_policy_contributor(policy.clone());
     let thread_manager = ThreadManager::new(

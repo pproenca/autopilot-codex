@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -9,14 +10,14 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
+use crate::DecisionGate;
 use crate::GAME_SERVER_NAME;
 
 pub struct GameCallPolicy {
     epoch: String,
     generation: u64,
-    mutation_attempts: AtomicUsize,
+    gate: Arc<DecisionGate>,
     unknown_tool_attempts: AtomicUsize,
-    mutation_authorizations: AtomicUsize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -33,13 +34,12 @@ pub struct PolicyAudit {
 }
 
 impl GameCallPolicy {
-    pub fn new(epoch: String, generation: u64) -> Self {
+    pub fn new(epoch: String, generation: u64, gate: Arc<DecisionGate>) -> Self {
         Self {
             epoch,
             generation,
-            mutation_attempts: AtomicUsize::new(0),
+            gate,
             unknown_tool_attempts: AtomicUsize::new(0),
-            mutation_authorizations: AtomicUsize::new(0),
         }
     }
 
@@ -51,10 +51,24 @@ impl GameCallPolicy {
     }
 
     pub fn audit(&self) -> PolicyAudit {
+        let decision_audit = self.gate.snapshot().audit;
         PolicyAudit {
-            mutation_attempts: self.mutation_attempts.load(Ordering::Relaxed),
+            mutation_attempts: decision_audit.mutation_attempts,
             unknown_tool_attempts: self.unknown_tool_attempts.load(Ordering::Relaxed),
-            mutation_authorizations: self.mutation_authorizations.load(Ordering::Relaxed),
+            mutation_authorizations: decision_audit.mutation_authorizations,
+        }
+    }
+
+    fn allow_with_owner_metadata(&self, call_id: &str) -> McpToolCallPolicyDecision {
+        let mut additional_request_meta = Map::new();
+        additional_request_meta.insert("epoch".to_string(), Value::String(self.epoch.clone()));
+        additional_request_meta.insert(
+            "generation".to_string(),
+            Value::Number(self.generation.into()),
+        );
+        additional_request_meta.insert("call_id".to_string(), Value::String(call_id.to_string()));
+        McpToolCallPolicyDecision::Allow {
+            additional_request_meta,
         }
     }
 }
@@ -68,38 +82,56 @@ impl McpToolCallPolicyContributor for GameCallPolicy {
                 };
             }
 
-            let tool_name = input.tool_name;
-            match tool_name {
-                "get_app_state" | "wait" | "zoom" => {
-                    let mut additional_request_meta = Map::new();
-                    additional_request_meta
-                        .insert("epoch".to_string(), Value::String(self.epoch.clone()));
-                    additional_request_meta.insert(
-                        "generation".to_string(),
-                        Value::Number(self.generation.into()),
-                    );
-                    additional_request_meta.insert(
-                        "call_id".to_string(),
-                        Value::String(input.call_id.to_string()),
-                    );
-                    McpToolCallPolicyDecision::Allow {
-                        additional_request_meta,
-                    }
+            match input.tool_name {
+                "get_app_state" => {
+                    self.gate.begin_full_observation();
+                    self.allow_with_owner_metadata(input.call_id)
+                }
+                "wait" => {
+                    self.gate.before_wait(input.arguments);
+                    self.allow_with_owner_metadata(input.call_id)
                 }
                 "click" | "drag" | "focus_click" => {
-                    self.mutation_attempts.fetch_add(1, Ordering::Relaxed);
-                    McpToolCallPolicyDecision::Deny {
-                        reason: format!(
-                            "game tool `{tool_name}` is mutating and disabled during observation"
-                        ),
+                    let arguments = input.arguments.unwrap_or(&Value::Null);
+                    match self.gate.prepare_mutation(
+                        input.tool_name,
+                        arguments,
+                        input.call_id,
+                    ) {
+                        Ok(authorization) => {
+                            let McpToolCallPolicyDecision::Allow {
+                                mut additional_request_meta,
+                            } = self.allow_with_owner_metadata(input.call_id)
+                            else {
+                                unreachable!("owner metadata is always allowed")
+                            };
+                            additional_request_meta.insert(
+                                "operation_id".to_string(),
+                                Value::String(authorization.operation_id),
+                            );
+                            additional_request_meta.insert(
+                                "action_sha256".to_string(),
+                                Value::String(authorization.action_sha256),
+                            );
+                            McpToolCallPolicyDecision::Allow {
+                                additional_request_meta,
+                            }
+                        }
+                        Err(error) => McpToolCallPolicyDecision::Deny {
+                            reason: error.to_string(),
+                        },
                     }
                 }
-                _ => {
+                "zoom" => {
                     self.unknown_tool_attempts.fetch_add(1, Ordering::Relaxed);
                     McpToolCallPolicyDecision::Deny {
-                        reason: format!(
-                            "unknown game tool `{tool_name}` is disabled during observation"
-                        ),
+                        reason: "unknown game tool `zoom` is disabled".to_string(),
+                    }
+                }
+                tool_name => {
+                    self.unknown_tool_attempts.fetch_add(1, Ordering::Relaxed);
+                    McpToolCallPolicyDecision::Deny {
+                        reason: format!("unknown game tool `{tool_name}` is disabled"),
                     }
                 }
             }

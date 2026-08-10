@@ -160,7 +160,7 @@ async fn load_runner_config_inner(
         "required": true,
         "supports_parallel_tool_calls": false,
         "default_tools_approval_mode": "approve",
-        "enabled_tools": ["get_app_state", "wait", "zoom"],
+        "enabled_tools": ["get_app_state", "wait", "click", "drag", "focus_click"],
         "startup_timeout_sec": 15,
         "tool_timeout_sec": 30,
     }))

@@ -77,7 +77,9 @@ async fn runner_config_is_fixed_to_read_only_sol() -> anyhow::Result<()> {
             game_tools: Some(vec![
                 "get_app_state".to_string(),
                 "wait".to_string(),
-                "zoom".to_string(),
+                "click".to_string(),
+                "drag".to_string(),
+                "focus_click".to_string(),
             ]),
             game_required: true,
             game_approval: Some(AppToolApproval::Approve),
