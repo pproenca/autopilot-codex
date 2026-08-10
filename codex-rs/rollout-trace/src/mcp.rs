@@ -5,6 +5,7 @@
 //! reduced artifact, and the bridge-private MCP request metadata key.
 
 use crate::McpCallId;
+use anyhow::bail;
 use serde_json::Value as JsonValue;
 
 const MCP_CALL_ID_META_KEY: &str = "codex_bridge_mcp_call_id";
@@ -34,18 +35,23 @@ impl McpCallTraceContext {
     }
 
     /// Adds bridge-private MCP correlation metadata to one outgoing request.
-    pub fn add_request_meta(&self, meta: Option<JsonValue>) -> Option<JsonValue> {
+    pub fn add_request_meta(&self, meta: Option<JsonValue>) -> anyhow::Result<Option<JsonValue>> {
         let Some(mcp_call_id) = self.mcp_call_id() else {
-            return meta;
+            return Ok(meta);
         };
 
         match meta {
             Some(JsonValue::Object(mut map)) => {
+                if map.contains_key(MCP_CALL_ID_META_KEY) {
+                    bail!(
+                        "MCP trace attempted to overwrite request metadata field `{MCP_CALL_ID_META_KEY}`"
+                    );
+                }
                 map.insert(
                     MCP_CALL_ID_META_KEY.to_string(),
                     JsonValue::String(mcp_call_id.to_string()),
                 );
-                Some(JsonValue::Object(map))
+                Ok(Some(JsonValue::Object(map)))
             }
             None => {
                 let mut map = serde_json::Map::new();
@@ -53,12 +59,9 @@ impl McpCallTraceContext {
                     MCP_CALL_ID_META_KEY.to_string(),
                     JsonValue::String(mcp_call_id.to_string()),
                 );
-                Some(JsonValue::Object(map))
+                Ok(Some(JsonValue::Object(map)))
             }
-            // This should never happen but if it does then we'll fallback to
-            // a noop rather than any breaking behavior. The tracing is best
-            // effort after all.
-            Some(_) => meta,
+            Some(_) => bail!("MCP request metadata must be a JSON object"),
         }
     }
 }
@@ -75,7 +78,9 @@ mod tests {
         let meta = Some(json!({"source": "test"}));
 
         assert_eq!(
-            McpCallTraceContext::disabled().add_request_meta(meta.clone()),
+            McpCallTraceContext::disabled()
+                .add_request_meta(meta.clone())
+                .expect("disabled tracing accepts existing metadata"),
             meta
         );
     }
@@ -85,6 +90,7 @@ mod tests {
         let trace = McpCallTraceContext::enabled("mcp-call-id".to_string());
         let meta = trace
             .add_request_meta(Some(json!({"source": "test"})))
+            .expect("trace metadata should not collide")
             .expect("enabled trace keeps request metadata");
         let object = meta
             .as_object()
@@ -94,6 +100,20 @@ mod tests {
         assert_eq!(
             object[MCP_CALL_ID_META_KEY],
             json!(trace.mcp_call_id().expect("enabled trace has an ID"))
+        );
+    }
+
+    #[test]
+    fn enabled_mcp_trace_rejects_bridge_correlation_meta_collision() {
+        let trace = McpCallTraceContext::enabled("mcp-call-id".to_string());
+
+        let error = trace
+            .add_request_meta(Some(json!({MCP_CALL_ID_META_KEY: "replacement"})))
+            .expect_err("trace metadata must not overwrite an existing field");
+
+        assert_eq!(
+            error.to_string(),
+            "MCP trace attempted to overwrite request metadata field `codex_bridge_mcp_call_id`"
         );
     }
 }

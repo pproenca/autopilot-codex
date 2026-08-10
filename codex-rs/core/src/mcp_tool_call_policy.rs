@@ -2,11 +2,15 @@ use anyhow::bail;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpToolCallPolicyDecision;
 use codex_extension_api::McpToolCallPolicyInput;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::map::Entry;
 
 use crate::config::Config;
+
+const MAX_DENIAL_REASON_TOKENS: usize = 512;
 
 pub(crate) async fn apply_mcp_tool_call_policies(
     extensions: &ExtensionRegistry<Config>,
@@ -51,6 +55,8 @@ pub(crate) async fn apply_mcp_tool_call_policies(
                 }
             }
             McpToolCallPolicyDecision::Deny { reason } => {
+                let reason =
+                    truncate_text(&reason, TruncationPolicy::Tokens(MAX_DENIAL_REASON_TOKENS));
                 bail!("MCP call policy denied `{server_name}/{tool_name}`: {reason}");
             }
         }

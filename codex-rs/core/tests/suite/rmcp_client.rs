@@ -27,6 +27,11 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::Environment;
 use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::McpToolCallPolicyContributor;
+use codex_extension_api::McpToolCallPolicyDecision;
+use codex_extension_api::McpToolCallPolicyFuture;
+use codex_extension_api::McpToolCallPolicyInput;
 use codex_features::Feature;
 use codex_http_client::HttpClientBuilder;
 use codex_login::CodexAuth;
@@ -93,6 +98,37 @@ use tokio::time::sleep;
 use wiremock::MockServer;
 
 static OPENAI_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD0AAAA9CAYAAAAeYmHpAAAE6klEQVR4Aeyau44UVxCGx1fZsmRLlm3Zoe0XcGQ5cUiCCIgJeS9CHgAhMkISQnIuGQgJEkBcxLW+nqnZ6uqqc+nuWRC7q/P3qetf9e+MtOwyX25O4Nep6JPyop++0qev9HrfgZ+F6r2DuB/vHOrt/UIkqdDHYvujOW6fO7h/CNEI+a5jc+pBR8uy0jVFsziYu5HtfSUk+Io34q921hLNctFSX0gwww+S8wce8K1LfCU+cYW4888aov8NxqvQILUPPReLOrm6zyLxa4i+6VZuFbJo8d1MOHZm+7VUtB/aIvhPWc/3SWg49JcwFLlHxuXKjtyloo+YNhuW3VS+WPBuUEMvCFKjEDVgFBQHXrnazpqiSxNZCkQ1kYiozsbm9Oz7l4i2Il7vGccGNWAc3XosDrZe/9P3ZnMmzHNEQw4smf8RQ87XEAMsC7Az0Au+dgXerfH4+sHvEc0SYGic8WBBUGqFH2gN7yDrazy7m2pbRTeRmU3+MjZmr1h6LJgPbGy23SI6GlYT0brQ71IY8Us4PNQCm+zepSbaD2BY9xCaAsD9IIj/IzFmKMSdHHonwdZATbTnYREf6/VZGER98N9yCWIvXQwXDoDdhZJoT8jwLnJXDB9w4Sb3e6nK5ndzlkTLnP3JBu4LKkbrYrU69gCVceV0JvpyuW1xlsUVngzhwMetn/XamtTORF9IO5YnWNiyeF9zCAfqR3fUW+vZZKLtgP+ts8BmQRBREAdRDhH3o8QuRh/YucNFz2BEjxbRN6LGzphfKmvP6v6QhqIQyZ8XNJ0W0X83MR1PEcJBNO2KC2Z1TW/v244scp9FwRViZxIOBF0Lctk7ZVSavdLvRlV1hz/ysUi9sr8CIcB3nvWBwA93ykTz18eAYxQ6N/K2DkPA1lv3iXCwmDUT7YkjIby9siXueIJj9H+pzSqJ9oIuJWTUgSSt4WO7o/9GGg0viR4VinNRUDoIj34xoCd6pxD3aK3zfdbnx5v1J3ZNNEJsE0sBG7N27ReDrJc4sFxz7dI/ZAbOmmiKvHBitQXpAdR6+F7v+/ol/tOouUV01EeMZQF2BoQDn6dP4XNr+j9GZEtEK1/L8pFw7bd3a53tsTa7WD+054jOFmPg1XBKPQgnqFfmFcy32ZRvjmiIIQTYFvyDxQ8nH8WIwwGwlyDjDznnilYyFr6njrlZwsKkBpO59A7OwgdzPEWRm+G+oeb7IfyNuzjEEVLrOVxJsxvxwF8kmCM6I2QYmJunz4u4TrADpfl7mlbRTWQ7VmrBzh3+C9f6Grc3YoGN9dg/SXFthpRsT6vobfXRs2VBlgBHXVMLHjDNbIZv1sZ9+X3hB09cXdH1JKViyG0+W9bWZDa/r2f9zAFR71sTzGpMSWz2iI4YssWjWo3REy1MDGjdwe5e0dFSiAC1JakBvu4/CUS8Eh6dqHdU0Or0ioY3W5ClSqDXAy7/6SRfgw8vt4I+tbvvNtFT2kVDhY5+IGb1rCqYaXNF08vSALsXCPmt0kQNqJT1p5eI1mkIV/BxCY1z85lOzeFbPBQHURkkPTlwTYK9gTVE25l84IbFFN+YJDHjdpn0gq6mrHht0dkcjbM4UL9283O5p77GN+SPW/QwVB4IUYg7Or+Kp7naR6qktP98LNF2UxWo9yObPIT9KYg+hK4i56no4rfnM0qeyFf6AwAAAP//trwR3wAAAAZJREFUAwBZ0sR75itw5gAAAABJRU5ErkJggg==";
+
+struct DirectMcpCallPolicy;
+
+impl McpToolCallPolicyContributor for DirectMcpCallPolicy {
+    fn evaluate<'a>(&'a self, input: McpToolCallPolicyInput<'a>) -> McpToolCallPolicyFuture<'a> {
+        Box::pin(async move {
+            match input.tool_name {
+                "sandbox_meta" => {
+                    let mut additional_request_meta = serde_json::Map::new();
+                    additional_request_meta.insert("policyOwner".to_string(), json!("game-runner"));
+                    McpToolCallPolicyDecision::Allow {
+                        additional_request_meta,
+                    }
+                }
+                "echo" => McpToolCallPolicyDecision::Deny {
+                    reason: "record a plan first".to_string(),
+                },
+                "cwd" => {
+                    let mut additional_request_meta = serde_json::Map::new();
+                    additional_request_meta.insert("callId".to_string(), json!("replacement"));
+                    McpToolCallPolicyDecision::Allow {
+                        additional_request_meta,
+                    }
+                }
+                _ => McpToolCallPolicyDecision::Allow {
+                    additional_request_meta: serde_json::Map::new(),
+                },
+            }
+        })
+    }
+}
 
 fn assert_wall_time_line(line: &str) {
     assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", line);
@@ -1422,6 +1458,159 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn stdio_mcp_call_policy_controls_portable_direct_calls() -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let server_name = "rmcp";
+    let namespace = format!("mcp__{server_name}");
+    let allow_call_id = "policy-allow";
+    let deny_call_id = "policy-deny";
+    let collision_call_id = "policy-collision";
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                allow_call_id,
+                &namespace,
+                "sandbox_meta",
+                "{}",
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let allow_result_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_function_call_with_namespace(
+                deny_call_id,
+                &namespace,
+                "echo",
+                r#"{"message":"must not run"}"#,
+            ),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let deny_result_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-3"),
+            responses::ev_function_call_with_namespace(collision_call_id, &namespace, "cwd", "{}"),
+            responses::ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "policy checks completed"),
+            responses::ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+    let command = remote_aware_stdio_server_bin()?;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_tool_call_policy_contributor(Arc::new(DirectMcpCallPolicy));
+    let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(command, /*env*/ None, Vec::new()),
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    fixture
+        .codex
+        .submit(read_only_user_turn(
+            &fixture,
+            "exercise the direct MCP policy",
+        ))
+        .await?;
+
+    let mut end_events = HashMap::new();
+    loop {
+        match fixture.codex.next_event().await?.msg {
+            EventMsg::McpToolCallEnd(end) => {
+                end_events.insert(end.call_id.clone(), end);
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert!(
+        end_events
+            .get(allow_call_id)
+            .expect("allow call should complete")
+            .is_success()
+    );
+    assert_eq!(
+        end_events
+            .get(deny_call_id)
+            .expect("denied call should complete")
+            .result,
+        Err("tool call error: MCP call policy denied `rmcp/echo`: record a plan first".to_string())
+    );
+    assert_eq!(
+        end_events
+            .get(collision_call_id)
+            .expect("collision call should complete")
+            .result,
+        Err(
+            "tool call error: MCP call policy for `rmcp/cwd` attempted to overwrite request metadata field `callId`"
+                .to_string()
+        )
+    );
+
+    let allow_output = allow_result_mock
+        .single_request()
+        .function_call_output(allow_call_id);
+    let allow_text = allow_output["output"]
+        .as_str()
+        .expect("allowed MCP output should be text");
+    let allow_meta: Value = serde_json::from_str(split_wall_time_wrapped_output(allow_text))?;
+    assert_eq!(allow_meta["policyOwner"], "game-runner");
+
+    for (request, call_id, expected) in [
+        (
+            deny_result_mock.single_request(),
+            deny_call_id,
+            "record a plan first",
+        ),
+        (
+            final_mock.single_request(),
+            collision_call_id,
+            "attempted to overwrite request metadata field `callId`",
+        ),
+    ] {
+        let output = request.function_call_output(call_id);
+        let text = output["output"]
+            .as_str()
+            .expect("failed MCP output should be text");
+        assert!(text.contains(expected), "unexpected policy output: {text}");
+    }
+
+    server.verify().await;
     Ok(())
 }
 
