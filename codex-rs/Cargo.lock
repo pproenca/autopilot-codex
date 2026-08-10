@@ -2438,7 +2438,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "url",
- "which 8.0.0",
+ "which 8.0.5",
  "windows-sys 0.52.0",
  "wiremock",
  "zstd",
@@ -2834,7 +2834,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
- "which 8.0.0",
+ "which 8.0.5",
  "whoami 1.6.1",
  "wiremock",
  "zstd",
@@ -2910,7 +2910,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-test",
  "url",
- "which 8.0.0",
+ "which 8.0.5",
  "wiremock",
  "zip",
 ]
@@ -3419,7 +3419,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "which 8.0.0",
+ "which 8.0.5",
  "wiremock",
 ]
 
@@ -3964,7 +3964,7 @@ dependencies = [
  "url",
  "urlencoding",
  "webbrowser",
- "which 8.0.0",
+ "which 8.0.5",
  "wiremock",
 ]
 
@@ -4031,7 +4031,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "which 8.0.0",
+ "which 8.0.5",
 ]
 
 [[package]]
@@ -4073,7 +4073,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-bash",
  "url",
- "which 8.0.0",
+ "which 8.0.5",
 ]
 
 [[package]]
@@ -4371,7 +4371,7 @@ dependencies = [
  "uuid",
  "vt100",
  "webbrowser",
- "which 8.0.0",
+ "which 8.0.5",
  "windows-sys 0.52.0",
  "winsplit",
  "wiremock",
@@ -5998,12 +5998,6 @@ dependencies = [
  "log",
  "regex",
 ]
-
-[[package]]
-name = "env_home"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
 name = "env_logger"
@@ -15176,13 +15170,11 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "8.0.0"
+version = "8.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3fabb953106c3c8eea8306e4393700d7657561cb43122571b172bbfb7c7ba1d"
+checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
 dependencies = [
- "env_home",
- "rustix 1.1.4",
- "winsafe",
+ "libc",
 ]
 
 [[package]]
