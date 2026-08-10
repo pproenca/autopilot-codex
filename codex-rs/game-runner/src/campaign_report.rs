@@ -11,13 +11,20 @@ use crate::ObservationEvidence;
 use crate::OwnerLease;
 use crate::PolicyAudit;
 use crate::ReportedOutcome;
+use crate::StrategyRecord;
 use crate::campaign::CampaignTerminalState;
+use crate::campaign_progress::CampaignSummary;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct CampaignReport {
     pub terminal_state: CampaignTerminalState,
     pub thread_id: String,
-    pub turn_ids: Vec<String>,
+    pub attempt_number: u64,
+    pub total_turns: u64,
+    pub total_actions: u64,
+    pub losses: u64,
+    pub strategy: Option<StrategyRecord>,
+    pub recent_turn_ids: Vec<String>,
     pub rollout_path: PathBuf,
     pub before: Option<ObservationEvidence>,
     pub after: Option<ObservationEvidence>,
@@ -34,7 +41,7 @@ pub struct CampaignReport {
 pub(crate) struct CampaignReportContext {
     pub terminal_state: CampaignTerminalState,
     pub thread_id: String,
-    pub turn_ids: Vec<String>,
+    pub summary: CampaignSummary,
     pub rollout_path: PathBuf,
     pub owner_lease: OwnerLease,
     pub policy_audit: PolicyAudit,
@@ -72,7 +79,12 @@ impl CampaignReport {
         Self {
             terminal_state: context.terminal_state,
             thread_id: context.thread_id,
-            turn_ids: context.turn_ids,
+            attempt_number: context.summary.attempt_number,
+            total_turns: context.summary.total_turns,
+            total_actions: context.summary.total_actions,
+            losses: context.summary.losses,
+            strategy: context.summary.strategy,
+            recent_turn_ids: context.summary.recent_turn_ids,
             rollout_path: context.rollout_path,
             before,
             after,

@@ -77,9 +77,9 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
         .context("campaign thread should retain a rollout")?;
 
     let report = CampaignRun::new(CampaignLimits {
-        max_turns: 2,
-        total_timeout: Duration::from_secs(30),
+        turn_timeout: Duration::from_secs(30),
         post_mutation_timeout: Duration::from_secs(10),
+        interrupt_timeout: Duration::from_secs(5),
     })
     .execute(
         &runtime.thread,
@@ -108,7 +108,7 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
     assert_eq!(report.terminal_state, CampaignTerminalState::Won);
     assert_eq!(report.thread_id, thread_id.to_string());
     assert_eq!(report.rollout_path, rollout_path);
-    assert_eq!(report.turn_ids.len(), 1);
+    assert_eq!(report.recent_turn_ids.len(), 1);
     assert_eq!(
         report
             .before
@@ -244,9 +244,9 @@ async fn mismatched_planned_action_never_reaches_helper() -> anyhow::Result<()> 
     } = start_runtime(&base.config, &temp, FakeGameScenario::NoMutation).await?;
 
     let report = CampaignRun::new(CampaignLimits {
-        max_turns: 1,
-        total_timeout: Duration::from_secs(30),
+        turn_timeout: Duration::from_secs(30),
         post_mutation_timeout: Duration::from_secs(10),
+        interrupt_timeout: Duration::from_secs(5),
     })
     .execute(
         &runtime.thread,
@@ -342,9 +342,9 @@ async fn missing_after_evidence_never_completes_canary() -> anyhow::Result<()> {
     } = start_runtime(&base.config, &temp, FakeGameScenario::FailedAfterCapture).await?;
 
     let report = CampaignRun::new(CampaignLimits {
-        max_turns: 2,
-        total_timeout: Duration::from_secs(30),
+        turn_timeout: Duration::from_secs(30),
         post_mutation_timeout: Duration::from_secs(5),
+        interrupt_timeout: Duration::from_secs(5),
     })
     .execute(
         &runtime.thread,

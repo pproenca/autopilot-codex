@@ -72,7 +72,11 @@ impl CampaignRun {
             };
 
             match event.msg {
-                EventMsg::TurnStarted(event) => progress.on_turn_started(event.turn_id),
+                EventMsg::TurnStarted(event) => {
+                    progress
+                        .on_turn_started(event.turn_id)
+                        .map_err(campaign_progress_error)?;
+                }
                 EventMsg::McpToolCallEnd(event) => observe_game_call_end(&gate, &event)?,
                 EventMsg::DynamicToolCallRequest(request) => {
                     let response = match tools.handle(&request) {
@@ -107,9 +111,24 @@ impl CampaignRun {
                             Some(error.message),
                         );
                     }
-                    match progress.on_turn_complete(&gate.snapshot()) {
-                        CampaignDirective::Continue => {
+                    match progress
+                        .on_turn_complete(&gate.snapshot())
+                        .map_err(campaign_progress_error)?
+                    {
+                        CampaignDirective::SubmitContinuation(_) => {
                             submit_prompt(thread, CONTINUATION_PROMPT).await?;
+                        }
+                        CampaignDirective::InterruptThenContinue(reason) => {
+                            return build_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                CampaignTerminalState::TerminalBlock,
+                                Some(format!(
+                                    "campaign continuation {reason:?} requires the continuous loop"
+                                )),
+                            );
                         }
                         CampaignDirective::Complete(state) => {
                             return build_report(session, &progress, policy, &gate, state, None);
@@ -162,7 +181,9 @@ impl CampaignRun {
                 }
                 _ => {}
             }
-            progress.observe_snapshot(&gate.snapshot());
+            progress
+                .observe_snapshot(&gate.snapshot(), Instant::now())
+                .map_err(campaign_progress_error)?;
         }
     }
 }
@@ -196,6 +217,12 @@ fn campaign_submit_error(error: impl std::fmt::Display) -> RunnerError {
     }
 }
 
+fn campaign_progress_error(error: impl std::fmt::Display) -> RunnerError {
+    RunnerError::CampaignFailed {
+        message: error.to_string(),
+    }
+}
+
 fn build_report(
     session: &SessionConfiguredEvent,
     progress: &CampaignProgress,
@@ -212,7 +239,7 @@ fn build_report(
         CampaignReportContext {
             terminal_state,
             thread_id: session.thread_id.to_string(),
-            turn_ids: progress.turn_ids().to_vec(),
+            summary: progress.summary(),
             rollout_path,
             owner_lease: policy.lease(),
             policy_audit: policy.audit(),

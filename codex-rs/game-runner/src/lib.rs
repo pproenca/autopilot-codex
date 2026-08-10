@@ -1,5 +1,6 @@
 mod action_batch;
 mod campaign;
+mod campaign_progress;
 mod campaign_report;
 mod campaign_tools;
 mod config;
@@ -15,9 +16,10 @@ mod runtime;
 mod strategy;
 
 pub use action_batch::MAX_ACTIONS_PER_TURN;
-pub use campaign::CampaignLimits;
 pub use campaign::CampaignRun;
 pub use campaign::CampaignTerminalState;
+pub use campaign_progress::CampaignLimits;
+pub use campaign_progress::CampaignSummary;
 pub use campaign_report::CampaignReport;
 pub use campaign_tools::CAMPAIGN_TOOL_NAMESPACE;
 pub use campaign_tools::CampaignToolError;

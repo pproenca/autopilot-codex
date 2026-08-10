@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -7,6 +8,8 @@ use serde_json::json;
 use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
 use crate::CampaignReport;
+use crate::CampaignLimits;
+use crate::CampaignSummary;
 use crate::ClickArguments;
 use crate::DecisionAudit;
 use crate::DecisionSnapshot;
@@ -25,9 +28,9 @@ use crate::StrategyRecord;
 use crate::campaign_report::CampaignReportContext;
 
 use super::CampaignDirective;
-use super::CampaignLimits;
 use super::CampaignProgress;
 use super::CampaignTerminalState;
+use super::ContinuationReason;
 
 fn empty_snapshot() -> DecisionSnapshot {
     DecisionSnapshot {
@@ -45,9 +48,9 @@ fn empty_snapshot() -> DecisionSnapshot {
 
 fn limits() -> CampaignLimits {
     CampaignLimits {
-        max_turns: 6,
-        total_timeout: Duration::from_secs(900),
+        turn_timeout: Duration::from_secs(900),
         post_mutation_timeout: Duration::from_secs(300),
+        interrupt_timeout: Duration::from_secs(30),
     }
 }
 
@@ -164,70 +167,81 @@ fn outcome_draft(outcome: OutcomeKind) -> OutcomeDraft {
 }
 
 #[test]
-fn early_turn_completion_continues_until_after_evidence_exists() {
+fn ordinary_turn_completion_requests_another_bounded_turn() -> anyhow::Result<()> {
     let mut progress = CampaignProgress::new(limits());
     assert_eq!(
-        progress.on_turn_complete(&empty_snapshot()),
-        CampaignDirective::Continue
+        progress.on_turn_complete(&empty_snapshot())?,
+        CampaignDirective::SubmitContinuation(ContinuationReason::Ordinary)
     );
-    progress.on_turn_started("turn-2".to_string());
-    assert_eq!(progress.turn_ids(), &["turn-2".to_string()]);
+    progress.on_turn_started("turn-2".to_string())?;
+    assert_eq!(
+        progress.summary().recent_turn_ids,
+        vec!["turn-2".to_string()]
+    );
+    Ok(())
 }
 
 #[test]
-fn sixth_turn_is_the_last_allowed_turn() {
+fn campaign_has_no_total_turn_limit() -> anyhow::Result<()> {
     let mut progress = CampaignProgress::new(limits());
-    for turn in 1..6 {
-        progress.on_turn_started(format!("turn-{turn}"));
+    for turn in 1..=65 {
+        progress.on_turn_started(format!("turn-{turn}"))?;
         assert_eq!(
-            progress.on_turn_complete(&empty_snapshot()),
-            CampaignDirective::Continue
+            progress.on_turn_complete(&empty_snapshot())?,
+            CampaignDirective::SubmitContinuation(ContinuationReason::Ordinary)
         );
     }
-    progress.on_turn_started("turn-6".to_string());
-    assert!(matches!(
-        progress.on_turn_complete(&empty_snapshot()),
-        CampaignDirective::Block(_)
-    ));
+    assert_eq!(progress.summary().total_turns, 65);
+    Ok(())
 }
 
 #[test]
-fn fresh_after_evidence_without_model_confirmation_blocks_campaign() {
+fn post_mutation_deadline_clears_after_fresh_evidence() -> anyhow::Result<()> {
     let mut progress = CampaignProgress::new(limits());
-    progress.on_turn_started("turn-1".to_string());
-    assert_eq!(
-        progress.on_turn_complete(&mutation_snapshot(false, None)),
-        CampaignDirective::Continue
-    );
-    let deadline = progress.next_deadline();
+    progress.on_turn_started("turn-1".to_string())?;
+    let now = Instant::now();
+    progress.observe_snapshot(&mutation_snapshot(false, None), now)?;
     assert!(matches!(
-        progress.deadline_directive(&mutation_snapshot(false, None), deadline),
+        progress.deadline_directive(
+            &mutation_snapshot(false, None),
+            now + Duration::from_secs(300),
+        ),
         Some(CampaignDirective::Block(_))
     ));
+    progress.observe_snapshot(
+        &mutation_snapshot(true, None),
+        now + Duration::from_secs(1),
+    )?;
     assert_eq!(
-        progress.on_turn_complete(&mutation_snapshot(true, None)),
-        CampaignDirective::Block(
-            "fresh post-mutation evidence was not classified by the model".to_string()
-        )
+        progress.deadline_directive(
+            &mutation_snapshot(true, None),
+            now + Duration::from_secs(300),
+        ),
+        None
     );
+    Ok(())
 }
 
 #[test]
-fn reported_outcomes_map_to_terminal_states() {
-    for (outcome, state) in [
-        (OutcomeKind::Win, CampaignTerminalState::Won),
-        (OutcomeKind::Loss, CampaignTerminalState::LossObserved),
-        (
-            OutcomeKind::TerminalBlock,
-            CampaignTerminalState::TerminalBlock,
-        ),
-    ] {
-        assert_eq!(
-            CampaignProgress::new(limits())
-                .on_turn_complete(&mutation_snapshot(true, Some(outcome))),
-            CampaignDirective::Complete(state)
-        );
-    }
+fn reported_outcomes_distinguish_attempt_and_campaign_terminal_states() -> anyhow::Result<()> {
+    assert_eq!(
+        CampaignProgress::new(limits())
+            .on_turn_complete(&mutation_snapshot(true, Some(OutcomeKind::Win)))?,
+        CampaignDirective::Complete(CampaignTerminalState::Won)
+    );
+    assert_eq!(
+        CampaignProgress::new(limits())
+            .on_turn_complete(&mutation_snapshot(true, Some(OutcomeKind::Loss)))?,
+        CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt)
+    );
+    assert!(matches!(
+        CampaignProgress::new(limits()).on_turn_complete(&mutation_snapshot(
+            true,
+            Some(OutcomeKind::TerminalBlock),
+        ))?,
+        CampaignDirective::Block(_)
+    ));
+    Ok(())
 }
 
 #[test]
@@ -236,7 +250,14 @@ fn report_projects_correlated_evidence_without_image_bytes() {
         CampaignReportContext {
             terminal_state: CampaignTerminalState::Won,
             thread_id: "thread-1".to_string(),
-            turn_ids: vec!["turn-1".to_string()],
+            summary: CampaignSummary {
+                attempt_number: 1,
+                total_turns: 1,
+                total_actions: 1,
+                losses: 0,
+                strategy: None,
+                recent_turn_ids: vec!["turn-1".to_string()],
+            },
             rollout_path: PathBuf::from("/rollouts/thread-1.jsonl"),
             owner_lease: OwnerLease {
                 epoch: "epoch-1".to_string(),
