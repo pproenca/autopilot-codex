@@ -11,6 +11,9 @@ use tokio::io::BufReader;
 use tokio::net::unix::OwnedReadHalf;
 use tokio::net::unix::OwnedWriteHalf;
 
+#[allow(dead_code)]
+pub mod continuous_game;
+
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn method(message: &Value) -> anyhow::Result<&str> {
