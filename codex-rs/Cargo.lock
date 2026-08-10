@@ -3202,6 +3202,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-game-runner"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-core-api",
+ "codex-stdio-to-uds",
+ "codex-utils-cargo-bin",
+ "core_test_support",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-git-attribution"
 version = "0.0.0"
 dependencies = [
