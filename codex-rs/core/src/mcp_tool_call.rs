@@ -14,6 +14,7 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::mcp_tool_call_policy::apply_mcp_tool_call_policies;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -445,6 +446,15 @@ async fn handle_approved_mcp_tool_call(
                     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
                         step_context,
                         &prepared_call,
+                        request_meta,
+                    )
+                    .await?;
+                    let request_meta = apply_mcp_tool_call_policies(
+                        sess.services.extensions.as_ref(),
+                        &server,
+                        &tool_name,
+                        call_id,
+                        rewritten_arguments.as_ref(),
                         request_meta,
                     )
                     .await?;

@@ -1,7 +1,13 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use codex_config::types::McpServerConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::McpToolCallPolicyContributor;
+use codex_extension_api::McpToolCallPolicyDecision;
+use codex_extension_api::McpToolCallPolicyFuture;
+use codex_extension_api::McpToolCallPolicyInput;
 use codex_protocol::models::PermissionProfile;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
@@ -10,6 +16,7 @@ use core_test_support::skip_if_remote;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -23,6 +30,38 @@ use tokio::net::unix::OwnedWriteHalf;
 const SERVER_NAME: &str = "game";
 const CALL_ID: &str = "game-observation-1";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct OwnerLeasePolicy;
+
+impl McpToolCallPolicyContributor for OwnerLeasePolicy {
+    fn evaluate<'a>(
+        &'a self,
+        input: McpToolCallPolicyInput<'a>,
+    ) -> McpToolCallPolicyFuture<'a> {
+        Box::pin(async move {
+            if input.server_name != SERVER_NAME {
+                return McpToolCallPolicyDecision::Allow {
+                    additional_request_meta: Map::new(),
+                };
+            }
+
+            assert_eq!(input.tool_name, "get_app_state");
+            assert_eq!(input.arguments, Some(&json!({})));
+
+            let Value::Object(additional_request_meta) = json!({
+                "epoch": "campaign-epoch",
+                "generation": 7,
+                "call_id": input.call_id,
+            }) else {
+                unreachable!("owner lease fixture must be an object");
+            };
+
+            McpToolCallPolicyDecision::Allow {
+                additional_request_meta,
+            }
+        })
+    }
+}
 
 async fn write_message(writer: &mut OwnedWriteHalf, message: &Value) -> anyhow::Result<()> {
     let mut encoded = serde_json::to_vec(message)?;
@@ -138,13 +177,28 @@ async fn serve_fake_game_mcp(listener: UnixListener) -> anyhow::Result<Vec<Strin
             "arguments": {},
         })
     );
-    assert!(metadata.get("callId").and_then(Value::as_str).is_some());
+    let call_id = metadata
+        .get("callId")
+        .and_then(Value::as_str)
+        .context("Codex call metadata should contain callId")?;
     assert!(metadata.get("threadId").and_then(Value::as_str).is_some());
     assert!(
         metadata
             .get("x-codex-turn-metadata")
             .and_then(Value::as_object)
             .is_some()
+    );
+    assert_eq!(
+        metadata.get("call_id").and_then(Value::as_str),
+        Some(call_id)
+    );
+    assert_eq!(
+        metadata.get("epoch").and_then(Value::as_str),
+        Some("campaign-epoch")
+    );
+    assert_eq!(
+        metadata.get("generation").and_then(Value::as_u64),
+        Some(7)
     );
     methods.push("tools/call".to_string());
     let tools_call_id = tools_call
@@ -225,7 +279,10 @@ text(JSON.stringify({ hasGameTool, structuredContent: result.structuredContent }
         "startup_timeout_sec": 15,
         "tool_timeout_sec": 5,
     }))?;
+    let mut extensions = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    extensions.mcp_tool_call_policy_contributor(Arc::new(OwnerLeasePolicy));
     let fixture = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_code_mode_host_program(code_mode_host_bin)
         .with_model_info_override("gpt-5.6-sol", |model| model.supports_search_tool = false)
         .with_config(move |config| {
