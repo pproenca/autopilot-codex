@@ -92,7 +92,7 @@ impl OutcomeDraft {
                 strategy.validate()?;
                 (observation_reference, visible_evidence_summary, lesson)
             }
-            | Self::Win {
+            Self::Win {
                 observation_reference,
                 visible_evidence_summary,
                 lesson,

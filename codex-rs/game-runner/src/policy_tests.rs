@@ -9,8 +9,8 @@ use serde_json::json;
 
 use crate::ClickArguments;
 use crate::DecisionGate;
-use crate::MutationResult;
 use crate::MAX_ACTIONS_PER_TURN;
+use crate::MutationResult;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;

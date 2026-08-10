@@ -7,26 +7,26 @@ use codex_core_api::McpToolCallEndEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use crate::ClickArguments;
 use crate::CampaignLimits;
 use crate::CampaignTerminalState;
+use crate::ClickArguments;
 use crate::DecisionGate;
 use crate::MutationResult;
 use crate::ObservationEvidence;
+use crate::OutcomeDraft;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
 use crate::ReportedOutcome;
 use crate::StrategyRecord;
-use crate::OutcomeDraft;
 use crate::campaign_progress::CampaignDirective;
 use crate::campaign_progress::CampaignProgress;
 use crate::campaign_progress::ContinuationReason;
 
+use super::observe_game_call_end;
 use super::reduce_accepted_outcome;
 use super::reduce_turn_aborted;
 use super::reduce_turn_complete;
-use super::observe_game_call_end;
 
 fn limits() -> CampaignLimits {
     CampaignLimits {
@@ -243,10 +243,7 @@ fn accepted_outcomes_continue_losses_but_finish_campaign_terminals() -> anyhow::
         lesson: "Physical state is unresolved".to_string(),
     });
     assert_eq!(
-        reduce_accepted_outcome(
-            &mut CampaignProgress::new(limits()),
-            &terminal_block,
-        )?,
+        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &terminal_block,)?,
         CampaignDirective::Block("The helper disconnected".to_string())
     );
     Ok(())

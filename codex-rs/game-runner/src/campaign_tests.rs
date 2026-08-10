@@ -7,8 +7,8 @@ use serde_json::json;
 
 use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
-use crate::CampaignReport;
 use crate::CampaignLimits;
+use crate::CampaignReport;
 use crate::CampaignSummary;
 use crate::ClickArguments;
 use crate::DecisionAudit;
@@ -208,10 +208,7 @@ fn post_mutation_deadline_clears_after_fresh_evidence() -> anyhow::Result<()> {
         ),
         Some(CampaignDirective::Block(_))
     ));
-    progress.observe_snapshot(
-        &mutation_snapshot(true, None),
-        now + Duration::from_secs(1),
-    )?;
+    progress.observe_snapshot(&mutation_snapshot(true, None), now + Duration::from_secs(1))?;
     assert_eq!(
         progress.deadline_directive(
             &mutation_snapshot(true, None),
@@ -235,10 +232,8 @@ fn reported_outcomes_distinguish_attempt_and_campaign_terminal_states() -> anyho
         CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt)
     );
     assert!(matches!(
-        CampaignProgress::new(limits()).on_turn_complete(&mutation_snapshot(
-            true,
-            Some(OutcomeKind::TerminalBlock),
-        ))?,
+        CampaignProgress::new(limits())
+            .on_turn_complete(&mutation_snapshot(true, Some(OutcomeKind::TerminalBlock),))?,
         CampaignDirective::Block(_)
     ));
     Ok(())

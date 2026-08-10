@@ -103,10 +103,7 @@ impl CampaignProgress {
         }
     }
 
-    pub(crate) fn on_turn_started(
-        &mut self,
-        turn_id: String,
-    ) -> Result<(), CampaignProgressError> {
+    pub(crate) fn on_turn_started(&mut self, turn_id: String) -> Result<(), CampaignProgressError> {
         if turn_id.len() > MAX_TURN_ID_BYTES {
             return Err(CampaignProgressError::TurnIdTooLarge);
         }
@@ -137,9 +134,7 @@ impl CampaignProgress {
                 self.strategy = Some(strategy.clone());
                 CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt)
             }
-            OutcomeDraft::Win { .. } => {
-                CampaignDirective::Complete(CampaignTerminalState::Won)
-            }
+            OutcomeDraft::Win { .. } => CampaignDirective::Complete(CampaignTerminalState::Won),
             OutcomeDraft::TerminalBlock {
                 visible_evidence_summary,
                 ..

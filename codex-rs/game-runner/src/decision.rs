@@ -37,7 +37,9 @@ pub enum DecisionError {
     MissingPlan,
     #[error("the mutation does not exactly match the accepted plan")]
     ActionMismatch,
-    #[error("the eight-action turn batch is exhausted; verify the latest action and finish this turn")]
+    #[error(
+        "the eight-action turn batch is exhausted; verify the latest action and finish this turn"
+    )]
     ActionBatchExhausted,
     #[error("the action batch is closed by a reported campaign outcome")]
     ActionBatchClosed,
@@ -305,17 +307,13 @@ impl DecisionGate {
         match state.batch.authorize() {
             Ok(()) => {}
             Err(ActionBatchError::Exhausted) => {
-                state.snapshot.audit.mutation_denials = checked_increment(
-                    state.snapshot.audit.mutation_denials,
-                    "mutation_denials",
-                )?;
+                state.snapshot.audit.mutation_denials =
+                    checked_increment(state.snapshot.audit.mutation_denials, "mutation_denials")?;
                 return Err(DecisionError::ActionBatchExhausted);
             }
             Err(ActionBatchError::Closed) => {
-                state.snapshot.audit.mutation_denials = checked_increment(
-                    state.snapshot.audit.mutation_denials,
-                    "mutation_denials",
-                )?;
+                state.snapshot.audit.mutation_denials =
+                    checked_increment(state.snapshot.audit.mutation_denials, "mutation_denials")?;
                 return Err(DecisionError::ActionBatchClosed);
             }
         }

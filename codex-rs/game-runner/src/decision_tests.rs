@@ -14,9 +14,9 @@ use super::PlannedAction;
 use crate::ClickArguments;
 use crate::DragArguments;
 use crate::FocusClickArguments;
+use crate::MAX_ACTIONS_PER_TURN;
 use crate::MouseButton;
 use crate::OutcomeDraft;
-use crate::MAX_ACTIONS_PER_TURN;
 
 #[test]
 fn click_action_has_exact_arguments_and_stable_hash() -> anyhow::Result<()> {

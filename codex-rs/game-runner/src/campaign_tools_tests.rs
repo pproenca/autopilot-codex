@@ -244,9 +244,11 @@ fn specs_expose_only_two_strict_direct_tools() {
                 .as_array()
                 .is_some_and(|required| required.iter().any(|field| field == "outcome"))
     }));
-    assert!(branches[0]["required"]
-        .as_array()
-        .is_some_and(|required| required.iter().any(|field| field == "strategy")));
+    assert!(
+        branches[0]["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "strategy"))
+    );
     assert!(branches[1..].iter().all(|branch| {
         branch["required"]
             .as_array()

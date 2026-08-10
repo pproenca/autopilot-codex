@@ -22,11 +22,11 @@ use crate::InvalidationReason;
 use crate::MutationResult;
 use crate::ReportedOutcome;
 use crate::RunnerError;
-use crate::campaign_report::CampaignReportContext;
 use crate::campaign_progress::CampaignProgressError;
 use crate::campaign_prompt::continuation_prompt;
 use crate::campaign_prompt::initial_prompt;
 use crate::campaign_prompt::new_attempt_prompt;
+use crate::campaign_report::CampaignReportContext;
 
 impl CampaignRun {
     pub async fn execute(
@@ -58,10 +58,15 @@ impl CampaignRun {
                     let directive = progress.deadline_directive(&gate.snapshot(), Instant::now());
                     match directive {
                         Some(CampaignDirective::InterruptThenContinue(reason)) => {
-                            if let Err(error) = begin_safe_interrupt(thread, &mut progress, reason).await
+                            if let Err(error) =
+                                begin_safe_interrupt(thread, &mut progress, reason).await
                             {
                                 return block_report(
-                                    session, &progress, policy, &gate, error.to_string(),
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
                                 );
                             }
                             continue;
@@ -89,23 +94,16 @@ impl CampaignRun {
             match event.msg {
                 EventMsg::TurnStarted(event) => {
                     if let Err(error) = progress.on_turn_started(event.turn_id) {
-                        return block_report(
-                            session, &progress, policy, &gate, error.to_string(),
-                        );
+                        return block_report(session, &progress, policy, &gate, error.to_string());
                     }
                 }
                 EventMsg::McpToolCallEnd(event) => {
                     if let Err(error) = observe_game_call_end(&gate, &event) {
-                        return block_report(
-                            session, &progress, policy, &gate, error.to_string(),
-                        );
+                        return block_report(session, &progress, policy, &gate, error.to_string());
                     }
-                    if let Err(error) =
-                        progress.observe_snapshot(&gate.snapshot(), Instant::now())
+                    if let Err(error) = progress.observe_snapshot(&gate.snapshot(), Instant::now())
                     {
-                        return block_report(
-                            session, &progress, policy, &gate, error.to_string(),
-                        );
+                        return block_report(session, &progress, policy, &gate, error.to_string());
                     }
                 }
                 EventMsg::DynamicToolCallRequest(request) => {
@@ -113,7 +111,11 @@ impl CampaignRun {
                         Ok(response) => response,
                         Err(error) => {
                             return block_report(
-                                session, &progress, policy, &gate, error.to_string(),
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
                             );
                         }
                     };
@@ -140,7 +142,11 @@ impl CampaignRun {
                             Ok(directive) => directive,
                             Err(error) => {
                                 return block_report(
-                                    session, &progress, policy, &gate, error.to_string(),
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
                                 );
                             }
                         };
@@ -150,7 +156,11 @@ impl CampaignRun {
                                     begin_safe_interrupt(thread, &mut progress, reason).await
                                 {
                                     return block_report(
-                                        session, &progress, policy, &gate, error.to_string(),
+                                        session,
+                                        &progress,
+                                        policy,
+                                        &gate,
+                                        error.to_string(),
                                     );
                                 }
                             }
@@ -168,7 +178,8 @@ impl CampaignRun {
                                     &progress,
                                     policy,
                                     &gate,
-                                    "accepted outcome requested an invalid continuation".to_string(),
+                                    "accepted outcome requested an invalid continuation"
+                                        .to_string(),
                                 );
                             }
                         }
@@ -185,7 +196,11 @@ impl CampaignRun {
                         Ok(directive) => directive,
                         Err(error) => {
                             return block_report(
-                                session, &progress, policy, &gate, error.to_string(),
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
                             );
                         }
                     };
@@ -198,7 +213,11 @@ impl CampaignRun {
                                 begin_safe_interrupt(thread, &mut progress, reason).await
                             {
                                 return block_report(
-                                    session, &progress, policy, &gate, error.to_string(),
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
                                 );
                             }
                         }
@@ -219,7 +238,11 @@ impl CampaignRun {
                         Ok(directive) => directive,
                         Err(error) => {
                             return block_report(
-                                session, &progress, policy, &gate, error.to_string(),
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
                             );
                         }
                     };
@@ -448,9 +471,7 @@ fn reduce_turn_complete(
 ) -> Result<CampaignDirective, CampaignProgressError> {
     match progress.complete_expected_interrupt() {
         Ok(directive) => Ok(directive),
-        Err(CampaignProgressError::MissingPendingInterrupt) => {
-            progress.on_turn_complete(snapshot)
-        }
+        Err(CampaignProgressError::MissingPendingInterrupt) => progress.on_turn_complete(snapshot),
         Err(error) => Err(error),
     }
 }

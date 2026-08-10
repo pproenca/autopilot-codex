@@ -150,7 +150,10 @@ pub fn turn_script(
     steps: &[PlannedClickStep],
     outcome: &ScriptedOutcome,
 ) -> anyhow::Result<String> {
-    anyhow::ensure!(!steps.is_empty(), "a scripted turn needs at least one action");
+    anyhow::ensure!(
+        !steps.is_empty(),
+        "a scripted turn needs at least one action"
+    );
     let mut script = String::new();
     for (offset, step) in steps.iter().enumerate() {
         let number = offset + 1;
@@ -215,11 +218,7 @@ pub fn turn_script(
         } => {
             writeln!(script, "  outcome: \"loss\",")?;
             write_outcome_strings(&mut script, visible_evidence_summary, lesson)?;
-            writeln!(
-                script,
-                "  strategy: {}",
-                serde_json::to_string(strategy)?
-            )?;
+            writeln!(script, "  strategy: {}", serde_json::to_string(strategy)?)?;
         }
         ScriptedOutcome::Win {
             visible_evidence_summary,
@@ -248,11 +247,7 @@ fn write_outcome_strings(
         "  visible_evidence_summary: {},",
         serde_json::to_string(visible_evidence_summary)?
     )?;
-    writeln!(
-        script,
-        "  lesson: {},",
-        serde_json::to_string(lesson)?
-    )?;
+    writeln!(script, "  lesson: {},", serde_json::to_string(lesson)?)?;
     Ok(())
 }
 
@@ -439,12 +434,21 @@ fn tool_specs() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}},
             "annotations": {"readOnlyHint": true},
         }),
-        mutation_spec("click", json!({"x": {"type": "integer"}, "y": {"type": "integer"}})),
-        mutation_spec("drag", json!({
-            "from_x": {"type": "integer"}, "from_y": {"type": "integer"},
-            "to_x": {"type": "integer"}, "to_y": {"type": "integer"}
-        })),
-        mutation_spec("focus_click", json!({"x": {"type": "integer"}, "y": {"type": "integer"}})),
+        mutation_spec(
+            "click",
+            json!({"x": {"type": "integer"}, "y": {"type": "integer"}}),
+        ),
+        mutation_spec(
+            "drag",
+            json!({
+                "from_x": {"type": "integer"}, "from_y": {"type": "integer"},
+                "to_x": {"type": "integer"}, "to_y": {"type": "integer"}
+            }),
+        ),
+        mutation_spec(
+            "focus_click",
+            json!({"x": {"type": "integer"}, "y": {"type": "integer"}}),
+        ),
     ]
 }
 

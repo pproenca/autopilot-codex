@@ -215,10 +215,7 @@ fn deadlines_distinguish_post_mutation_turn_and_expected_interrupts() -> anyhow:
     let gate = gate_with_unresolved_mutation()?;
     progress.observe_snapshot(&gate.snapshot(), now)?;
     assert!(matches!(
-        progress.deadline_directive(
-            &gate.snapshot(),
-            now + Duration::from_secs(5 * 60),
-        ),
+        progress.deadline_directive(&gate.snapshot(), now + Duration::from_secs(5 * 60),),
         Some(CampaignDirective::Block(_))
     ));
 
@@ -231,10 +228,7 @@ fn deadlines_distinguish_post_mutation_turn_and_expected_interrupts() -> anyhow:
     )?;
     progress.observe_snapshot(&gate.snapshot(), now + Duration::from_secs(1))?;
     assert_eq!(
-        progress.deadline_directive(
-            &gate.snapshot(),
-            now + Duration::from_secs(5 * 60),
-        ),
+        progress.deadline_directive(&gate.snapshot(), now + Duration::from_secs(5 * 60),),
         None
     );
 
@@ -247,10 +241,7 @@ fn deadlines_distinguish_post_mutation_turn_and_expected_interrupts() -> anyhow:
     );
     progress.begin_interrupt(ContinuationReason::TurnTimeout, turn_deadline)?;
     assert!(matches!(
-        progress.deadline_directive(
-            &gate.snapshot(),
-            turn_deadline + Duration::from_secs(30),
-        ),
+        progress.deadline_directive(&gate.snapshot(), turn_deadline + Duration::from_secs(30),),
         Some(CampaignDirective::Block(_))
     ));
     assert_eq!(

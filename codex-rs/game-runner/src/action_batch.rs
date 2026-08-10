@@ -8,7 +8,9 @@ pub(crate) struct ActionBatch {
 
 #[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum ActionBatchError {
-    #[error("the eight-action turn batch is exhausted; verify the latest action and finish this turn")]
+    #[error(
+        "the eight-action turn batch is exhausted; verify the latest action and finish this turn"
+    )]
     Exhausted,
     #[error("the action batch is closed by a reported campaign outcome")]
     Closed,
@@ -44,11 +46,11 @@ impl ActionBatch {
         self.closed = true;
     }
 
-    pub(crate) fn used(&self) -> u8 {
+    pub(crate) fn used(self) -> u8 {
         self.used
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(self) -> bool {
         self.closed
     }
 }

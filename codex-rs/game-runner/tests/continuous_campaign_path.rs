@@ -121,14 +121,14 @@ async fn repeated_planned_actions_share_one_bounded_turn() -> anyhow::Result<()>
     .await?;
 
     let report = CampaignRun::new(test_limits())
-    .execute(
-        &runtime.thread,
-        &runtime.session_configured,
-        policy.as_ref(),
-        gate,
-        "Gambonanza",
-    )
-    .await?;
+        .execute(
+            &runtime.thread,
+            &runtime.session_configured,
+            policy.as_ref(),
+            gate,
+            "Gambonanza",
+        )
+        .await?;
     let cleanup_errors = runtime.shutdown(ShutdownMode::Completed).await;
     let trace = helper_task
         .await?
@@ -191,7 +191,11 @@ async fn repeated_planned_actions_share_one_bounded_turn() -> anyhow::Result<()>
         ]
     );
     assert_eq!(std::fs::read_dir(spool_root)?.count(), 0);
-    assert!(exec_response.single_request().body_contains_text("Gambonanza"));
+    assert!(
+        exec_response
+            .single_request()
+            .body_contains_text("Gambonanza")
+    );
     server.verify().await;
     Ok(())
 }
