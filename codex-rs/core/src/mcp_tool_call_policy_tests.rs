@@ -6,6 +6,7 @@ use codex_extension_api::McpToolCallPolicyDecision;
 use codex_extension_api::McpToolCallPolicyFuture;
 use codex_extension_api::McpToolCallPolicyInput;
 use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use pretty_assertions::assert_eq;
 use serde_json::Map;
@@ -128,7 +129,7 @@ async fn policy_denial_returns_model_visible_reason() {
 #[tokio::test]
 async fn policy_denial_bounds_model_visible_reason() {
     let oversized_reason = "record a plan before moving. ".repeat(4_096);
-    let expected_reason = truncate_text(&oversized_reason, TruncationPolicy::Tokens(512));
+    let expected_reason = truncate_text(&oversized_reason, TruncationPolicy::Tokens(480));
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     builder.mcp_tool_call_policy_contributor(Arc::new(Deny(oversized_reason)));
     let registry = builder.build();
@@ -140,6 +141,10 @@ async fn policy_denial_bounds_model_visible_reason() {
     assert_eq!(
         error.to_string(),
         format!("MCP call policy denied `game/click`: {expected_reason}")
+    );
+    assert!(
+        approx_token_count(&error.to_string()) <= 512,
+        "the complete model-visible denial must fit its token budget"
     );
 }
 

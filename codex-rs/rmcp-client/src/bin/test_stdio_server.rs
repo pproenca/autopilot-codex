@@ -5,6 +5,7 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -43,6 +44,7 @@ struct TestToolServer {
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
     supports_openai_form_elicitation: Arc<AtomicBool>,
+    tool_call_count: Arc<AtomicUsize>,
 }
 
 const MEMO_URI: &str = "memo://codex/example-note";
@@ -141,6 +143,7 @@ impl TestToolServer {
             resources: Arc::new(resources),
             resource_templates: Arc::new(resource_templates),
             supports_openai_form_elicitation: Arc::new(AtomicBool::new(false)),
+            tool_call_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -596,15 +599,21 @@ impl ServerHandler for TestToolServer {
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let tool_call_count = self
+            .tool_call_count
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         match request.name.as_ref() {
             "client_capabilities" => Ok(Self::structured_result(json!({
                 "supportsOpenaiFormElicitation": self
                     .supports_openai_form_elicitation
                     .load(Ordering::Relaxed),
             }))),
-            "sandbox_meta" => Ok(Self::structured_result(serde_json::Value::Object(
-                context.meta.0.0,
-            ))),
+            "sandbox_meta" => {
+                let mut meta = context.meta.0.0;
+                meta.insert("testToolCallCount".to_string(), json!(tool_call_count));
+                Ok(Self::structured_result(serde_json::Value::Object(meta)))
+            }
             "cwd" => {
                 let cwd = std::env::current_dir()
                     .map(|path| path.to_string_lossy().into_owned())

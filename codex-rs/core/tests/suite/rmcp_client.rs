@@ -1480,34 +1480,34 @@ async fn stdio_mcp_call_policy_controls_portable_direct_calls() -> anyhow::Resul
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call_with_namespace(
-                allow_call_id,
-                &namespace,
-                "sandbox_meta",
-                "{}",
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let allow_result_mock = mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-2"),
-            responses::ev_function_call_with_namespace(
                 deny_call_id,
                 &namespace,
                 "echo",
                 r#"{"message":"must not run"}"#,
             ),
-            responses::ev_completed("resp-2"),
+            responses::ev_completed("resp-1"),
         ]),
     )
     .await;
     let deny_result_mock = mount_sse_once(
         &server,
         responses::sse(vec![
-            responses::ev_response_created("resp-3"),
+            responses::ev_response_created("resp-2"),
             responses::ev_function_call_with_namespace(collision_call_id, &namespace, "cwd", "{}"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+    let collision_result_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-3"),
+            responses::ev_function_call_with_namespace(
+                allow_call_id,
+                &namespace,
+                "sandbox_meta",
+                "{}",
+            ),
             responses::ev_completed("resp-3"),
         ]),
     )
@@ -1582,7 +1582,7 @@ async fn stdio_mcp_call_policy_controls_portable_direct_calls() -> anyhow::Resul
         )
     );
 
-    let allow_output = allow_result_mock
+    let allow_output = final_mock
         .single_request()
         .function_call_output(allow_call_id);
     let allow_text = allow_output["output"]
@@ -1590,6 +1590,7 @@ async fn stdio_mcp_call_policy_controls_portable_direct_calls() -> anyhow::Resul
         .expect("allowed MCP output should be text");
     let allow_meta: Value = serde_json::from_str(split_wall_time_wrapped_output(allow_text))?;
     assert_eq!(allow_meta["policyOwner"], "game-runner");
+    assert_eq!(allow_meta["testToolCallCount"], 1);
 
     for (request, call_id, expected) in [
         (
@@ -1598,7 +1599,7 @@ async fn stdio_mcp_call_policy_controls_portable_direct_calls() -> anyhow::Resul
             "record a plan first",
         ),
         (
-            final_mock.single_request(),
+            collision_result_mock.single_request(),
             collision_call_id,
             "attempted to overwrite request metadata field `callId`",
         ),

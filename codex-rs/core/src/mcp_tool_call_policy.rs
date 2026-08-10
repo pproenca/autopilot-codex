@@ -10,7 +10,7 @@ use serde_json::map::Entry;
 
 use crate::config::Config;
 
-const MAX_DENIAL_REASON_TOKENS: usize = 512;
+const DENIAL_REASON_TRUNCATION_BUDGET_TOKENS: usize = 480;
 
 pub(crate) async fn apply_mcp_tool_call_policies(
     extensions: &ExtensionRegistry<Config>,
@@ -55,8 +55,12 @@ pub(crate) async fn apply_mcp_tool_call_policies(
                 }
             }
             McpToolCallPolicyDecision::Deny { reason } => {
-                let reason =
-                    truncate_text(&reason, TruncationPolicy::Tokens(MAX_DENIAL_REASON_TOKENS));
+                // Reserve room for the truncation marker and the error prefix so the complete
+                // model-visible denial remains below the 512-token context-item limit.
+                let reason = truncate_text(
+                    &reason,
+                    TruncationPolicy::Tokens(DENIAL_REASON_TRUNCATION_BUDGET_TOKENS),
+                );
                 bail!("MCP call policy denied `{server_name}/{tool_name}`: {reason}");
             }
         }

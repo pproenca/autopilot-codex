@@ -464,7 +464,7 @@ async fn handle_approved_mcp_tool_call(
                         .start_mcp_call_trace(call_id);
                     Ok((
                         rewritten_arguments,
-                        mcp_call_trace.add_request_meta(request_meta)?,
+                        mcp_call_trace.add_request_meta(request_meta),
                     ))
                 })
                 .await
