@@ -8,38 +8,22 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Parser;
 use codex_core_api::Arg0DispatchPaths;
-use codex_core_api::AuthManager;
-use codex_core_api::CodexAppsToolsCache;
-use codex_core_api::Config;
-use codex_core_api::EnvironmentManager;
-use codex_core_api::ExecServerRuntimePaths;
-use codex_core_api::ExtensionRegistryBuilder;
-use codex_core_api::LoadUserInstructionsFuture;
-use codex_core_api::LoadedUserInstructions;
-use codex_core_api::NewThread;
-use codex_core_api::Op;
-use codex_core_api::SessionSource;
-use codex_core_api::StartThreadOptions;
-use codex_core_api::ThreadManager;
-use codex_core_api::UserInstructionsProvider;
 use codex_core_api::arg0_dispatch_or_else;
-use codex_core_api::build_models_manager;
 use codex_core_api::find_codex_home;
-use codex_core_api::init_state_db;
-use codex_core_api::local_agent_graph_store_from_state_db;
-use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
-use codex_core_api::thread_store_from_config;
+use codex_game_runner::CampaignLimits;
+use codex_game_runner::CampaignReport;
+use codex_game_runner::CampaignRun;
+use codex_game_runner::CampaignTools;
 use codex_game_runner::GENERATION;
 use codex_game_runner::DecisionGate;
 use codex_game_runner::GameCallPolicy;
 use codex_game_runner::HelperLauncher;
-use codex_game_runner::ObservationLimits;
-use codex_game_runner::ObservationReport;
-use codex_game_runner::ObservationRun;
 use codex_game_runner::ReadinessLimits;
 use codex_game_runner::RunnerDeployment;
 use codex_game_runner::RunnerError;
+use codex_game_runner::RunnerRuntime;
+use codex_game_runner::ShutdownMode;
 use uuid::Uuid;
 
 const BRIDGE_MODE: &str = "__stdio-to-uds";
@@ -55,14 +39,6 @@ struct Args {
 
     #[arg(long, value_name = "APP_NAME")]
     target_app: String,
-}
-
-struct NoUserInstructions;
-
-impl UserInstructionsProvider for NoUserInstructions {
-    fn load_user_instructions(&self) -> LoadUserInstructionsFuture<'_> {
-        Box::pin(async { LoadedUserInstructions::default() })
-    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -95,11 +71,14 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         .context("resolve game runner executable")?;
     let report = run(Args::parse(), runner_executable).await?;
     serde_json::to_writer(std::io::stdout().lock(), &report)
-        .context("serialize observation report")?;
+        .context("serialize campaign report")?;
+    if !report.terminal_state.is_success() {
+        bail!("game campaign ended in {:?}", report.terminal_state);
+    }
     Ok(())
 }
 
-async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<ObservationReport> {
+async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignReport> {
     let codex_home = find_codex_home()
         .context("find Codex home")
         .map_err(|source| RunnerError::Config { source })?;
@@ -118,94 +97,32 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<Observati
     .ensure_serving(&deployment)
     .await?;
 
-    let state_db = init_state_db(&config).await;
-    let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-        config.codex_self_exe.clone(),
-        config.codex_linux_sandbox_exe.clone(),
-    )
-    .context("resolve local execution runtime")
-    .map_err(thread_startup_error)?;
-    let thread_store = thread_store_from_config(&config, state_db.clone());
-    let environment_manager = Arc::new(
-        EnvironmentManager::from_codex_home(
-            config.codex_home.clone(),
-            Some(local_runtime_paths),
-            config.http_client_factory(),
-        )
-        .await
-        .context("initialize environment manager")
-        .map_err(thread_startup_error)?,
-    );
-    let installation_id = resolve_installation_id(&config.codex_home)
-        .await
-        .context("resolve installation identity")
-        .map_err(thread_startup_error)?;
-
     let gate = Arc::new(DecisionGate::new(GENERATION));
     let policy = Arc::new(GameCallPolicy::new(
         Uuid::new_v4().to_string(),
         GENERATION,
-        gate,
+        Arc::clone(&gate),
     ));
-    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.mcp_tool_call_policy_contributor(policy.clone());
-    let thread_manager = ThreadManager::new(
-        &config,
-        Arc::clone(&auth_manager),
-        build_models_manager(&config, auth_manager),
-        CodexAppsToolsCache::default(),
-        SessionSource::Custom("game_runner".to_string()),
-        environment_manager,
-        Arc::new(extensions.build()),
-        Arc::new(NoUserInstructions),
-        /*analytics_events_client*/ None,
-        Arc::clone(&thread_store),
-        local_agent_graph_store_from_state_db(state_db.as_ref()),
-        installation_id,
-        /*attestation_provider*/ None,
-        /*external_time_provider*/ None,
-    );
+    let runtime = RunnerRuntime::start(config, Arc::clone(&policy), CampaignTools::specs()).await?;
+    let campaign = CampaignRun::new(CampaignLimits::stage_4a())
+        .execute(
+            &runtime.thread,
+            &runtime.session_configured,
+            policy.as_ref(),
+            gate,
+            &deployment.target_app,
+        )
+        .await;
+    let shutdown_mode = if campaign.is_ok() {
+        ShutdownMode::Completed
+    } else {
+        ShutdownMode::Interrupt
+    };
+    let cleanup_errors = runtime.shutdown(shutdown_mode).await;
 
-    let NewThread {
-        thread_id,
-        thread,
-        session_configured,
-    } = thread_manager
-        .start_thread(StartThreadOptions::new(config))
-        .await
-        .context("start game observation thread")
-        .map_err(thread_startup_error)?;
-
-    let observation = ObservationRun::new(ObservationLimits {
-        turn_timeout: Duration::from_secs(5 * 60),
-    })
-    .execute(
-        &thread,
-        &session_configured,
-        policy.as_ref(),
-        &deployment.target_app,
-    )
-    .await;
-
-    let mut cleanup_errors = Vec::new();
-    if observation.is_err()
-        && let Err(error) = thread.submit(Op::Interrupt).await
-    {
-        cleanup_errors.push(format!("interrupt failed: {error}"));
-    }
-    if let Err(error) = thread.shutdown_and_wait().await {
-        cleanup_errors.push(format!("shutdown failed: {error}"));
-    }
-    let _ = thread_manager.remove_thread(&thread_id).await;
-
-    match (observation, cleanup_errors.is_empty()) {
+    match (campaign, cleanup_errors.is_empty()) {
         (Ok(report), true) => Ok(report),
-        (Ok(_), false) => bail!(
-            "game observation cleanup failed: {}",
-            cleanup_errors.join("; ")
-        ),
+        (Ok(_), false) => bail!("game campaign cleanup failed: {}", cleanup_errors.join("; ")),
         (Err(primary), true) => Err(primary.into()),
         (Err(primary), false) => Err(RunnerError::RunAndCleanupFailed {
             primary: Box::new(primary),
@@ -213,10 +130,6 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<Observati
         }
         .into()),
     }
-}
-
-fn thread_startup_error(source: anyhow::Error) -> RunnerError {
-    RunnerError::ThreadStartup { source }
 }
 
 #[cfg(test)]

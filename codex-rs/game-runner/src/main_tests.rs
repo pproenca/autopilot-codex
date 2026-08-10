@@ -1,12 +1,15 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use clap::Parser;
+use codex_game_runner::CampaignReport;
 use pretty_assertions::assert_eq;
 
 use super::Args;
 use super::dispatch_main;
+use super::run;
 
 #[test]
 fn parses_only_deployment_facts() {
@@ -49,4 +52,22 @@ fn runner_entry_uses_the_codex_main_runtime() -> anyhow::Result<()> {
         Some("codex-main".to_string())
     );
     Ok(())
+}
+
+#[test]
+fn production_run_returns_a_campaign_report() {
+    fn assert_campaign_report(
+        future: impl Future<Output = anyhow::Result<CampaignReport>>,
+    ) {
+        drop(future);
+    }
+
+    assert_campaign_report(run(
+        Args {
+            helper_app: PathBuf::from("/signed/AutoPilotHelper.app"),
+            socket: PathBuf::from("/private/game.sock"),
+            target_app: "Gambonanza".to_string(),
+        },
+        PathBuf::from("/bin/codex-game-runner"),
+    ));
 }

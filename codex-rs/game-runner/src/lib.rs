@@ -7,6 +7,7 @@ mod helper;
 mod image_bridge;
 mod observation;
 mod policy;
+mod runtime;
 
 pub use campaign::CampaignLimits;
 pub use campaign::CampaignRun;
@@ -52,3 +53,5 @@ pub use observation::ObservationRun;
 pub use policy::GameCallPolicy;
 pub use policy::OwnerLease;
 pub use policy::PolicyAudit;
+pub use runtime::RunnerRuntime;
+pub use runtime::ShutdownMode;
