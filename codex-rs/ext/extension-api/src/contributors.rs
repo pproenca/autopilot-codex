@@ -14,6 +14,7 @@ use crate::ExtensionMetrics;
 
 mod context;
 mod mcp;
+mod mcp_tool_call_policy;
 mod prompt;
 mod skill_invocation;
 mod thread_lifecycle;
@@ -25,6 +26,10 @@ mod world_state;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp_tool_call_policy::McpToolCallPolicyContributor;
+pub use mcp_tool_call_policy::McpToolCallPolicyDecision;
+pub use mcp_tool_call_policy::McpToolCallPolicyFuture;
+pub use mcp_tool_call_policy::McpToolCallPolicyInput;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use skill_invocation::SkillInvocationInput;

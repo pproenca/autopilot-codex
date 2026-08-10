@@ -8,6 +8,7 @@ use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
+use crate::McpToolCallPolicyContributor;
 use crate::NoopExtensionEventSink;
 use crate::SkillInvocationContributor;
 use crate::ThreadLifecycleContributor;
@@ -36,6 +37,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
                 approval_review_contributors: Vec::new(),
                 context_contributors: Vec::new(),
                 mcp_server_contributors: Vec::new(),
+                mcp_tool_call_policy_contributors: Vec::new(),
                 turn_input_contributors: Vec::new(),
                 tool_contributors: Vec::new(),
                 tool_lifecycle_contributors: Vec::new(),
@@ -113,6 +115,16 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.registry.mcp_server_contributors.push(contributor);
     }
 
+    /// Registers one MCP tool-call policy contributor.
+    pub fn mcp_tool_call_policy_contributor(
+        &mut self,
+        contributor: Arc<dyn McpToolCallPolicyContributor>,
+    ) {
+        self.registry
+            .mcp_tool_call_policy_contributors
+            .push(contributor);
+    }
+
     /// Registers one turn-input contributor.
     pub fn turn_input_contributor(&mut self, contributor: Arc<dyn TurnInputContributor>) {
         self.registry.turn_input_contributors.push(contributor);
@@ -149,6 +161,7 @@ pub struct ExtensionRegistry<C: Sync> {
     skill_invocation_contributors: Vec<Arc<dyn SkillInvocationContributor>>,
     context_contributors: Vec<Arc<dyn ContextContributor>>,
     mcp_server_contributors: Vec<Arc<dyn McpServerContributor<C>>>,
+    mcp_tool_call_policy_contributors: Vec<Arc<dyn McpToolCallPolicyContributor>>,
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
@@ -215,6 +228,13 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered runtime MCP server contributors.
     pub fn mcp_server_contributors(&self) -> &[Arc<dyn McpServerContributor<C>>] {
         &self.mcp_server_contributors
+    }
+
+    /// Returns the registered MCP tool-call policy contributors.
+    pub fn mcp_tool_call_policy_contributors(
+        &self,
+    ) -> &[Arc<dyn McpToolCallPolicyContributor>] {
+        &self.mcp_tool_call_policy_contributors
     }
 
     /// Returns the registered turn-input contributors.

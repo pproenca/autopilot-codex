@@ -68,6 +68,10 @@ pub use codex_mcp::CodexAppsToolsCache;
 pub use codex_mcp::SandboxState;
 mod mcp_openai_file;
 mod mcp_tool_call;
+mod mcp_tool_call_policy;
+#[cfg(test)]
+#[path = "mcp_tool_call_policy_tests.rs"]
+mod mcp_tool_call_policy_tests;
 pub(crate) mod mention_syntax;
 pub(crate) mod utils;
 pub use mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
