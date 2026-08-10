@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6,6 +7,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::bail;
 use clap::Parser;
+use codex_core_api::Arg0DispatchPaths;
 use codex_core_api::AuthManager;
 use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::Config;
@@ -20,6 +22,7 @@ use codex_core_api::SessionSource;
 use codex_core_api::StartThreadOptions;
 use codex_core_api::ThreadManager;
 use codex_core_api::UserInstructionsProvider;
+use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::build_models_manager;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
@@ -61,8 +64,19 @@ impl UserInstructionsProvider for NoUserInstructions {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    dispatch_main(run_main)
+}
+
+fn dispatch_main<F, Fut>(main_fn: F) -> anyhow::Result<()>
+where
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    arg0_dispatch_or_else(main_fn)
+}
+
+async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args.first().and_then(|arg| arg.to_str()) == Some(BRIDGE_MODE) {
         let [_, socket] = raw_args.as_slice() else {
@@ -75,19 +89,19 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("failed to set originator: {err:?}");
     }
 
-    let report = run(Args::parse()).await?;
+    let runner_executable = arg0_paths
+        .codex_self_exe
+        .context("resolve game runner executable")?;
+    let report = run(Args::parse(), runner_executable).await?;
     serde_json::to_writer(std::io::stdout().lock(), &report)
         .context("serialize observation report")?;
     Ok(())
 }
 
-async fn run(args: Args) -> anyhow::Result<ObservationReport> {
-    let runner_executable = std::env::current_exe()
-        .context("resolve game runner executable")
-        .map_err(config_error)?;
+async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<ObservationReport> {
     let codex_home = find_codex_home()
         .context("find Codex home")
-        .map_err(config_error)?;
+        .map_err(|source| RunnerError::Config { source })?;
     let deployment = RunnerDeployment {
         helper_app: args.helper_app,
         socket_path: args.socket,
@@ -193,10 +207,6 @@ async fn run(args: Args) -> anyhow::Result<ObservationReport> {
         }
         .into()),
     }
-}
-
-fn config_error(source: anyhow::Error) -> RunnerError {
-    RunnerError::Config { source }
 }
 
 fn thread_startup_error(source: anyhow::Error) -> RunnerError {
