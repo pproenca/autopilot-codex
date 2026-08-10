@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_core_api::CallToolResult;
 use codex_core_api::McpInvocation;
@@ -7,14 +8,46 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use crate::ClickArguments;
+use crate::CampaignLimits;
+use crate::CampaignTerminalState;
 use crate::DecisionGate;
 use crate::MutationResult;
 use crate::ObservationEvidence;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
+use crate::ReportedOutcome;
+use crate::StrategyRecord;
+use crate::OutcomeDraft;
+use crate::campaign_progress::CampaignDirective;
+use crate::campaign_progress::CampaignProgress;
+use crate::campaign_progress::ContinuationReason;
 
+use super::reduce_accepted_outcome;
+use super::reduce_turn_aborted;
+use super::reduce_turn_complete;
 use super::observe_game_call_end;
+
+fn limits() -> CampaignLimits {
+    CampaignLimits {
+        turn_timeout: Duration::from_secs(15 * 60),
+        post_mutation_timeout: Duration::from_secs(5 * 60),
+        interrupt_timeout: Duration::from_secs(30),
+    }
+}
+
+fn reported_outcome(draft: OutcomeDraft) -> ReportedOutcome {
+    ReportedOutcome {
+        observation: ObservationEvidence {
+            generation: 2,
+            call_id: "capture-after".to_string(),
+            reference: draft.observation_reference().to_string(),
+            width: 1051,
+            height: 820,
+        },
+        draft,
+    }
+}
 
 fn tool_end(tool: &str, result: Result<CallToolResult, String>) -> McpToolCallEndEvent {
     McpToolCallEndEvent {
@@ -151,5 +184,70 @@ fn game_call_reducer_classifies_authorized_mutation_results() -> anyhow::Result<
             Some(expected)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn turn_reducers_continue_normally_and_only_accept_expected_aborts() -> anyhow::Result<()> {
+    let gate = DecisionGate::new(1);
+    let mut progress = CampaignProgress::new(limits());
+    assert_eq!(
+        reduce_turn_complete(&mut progress, &gate.snapshot())?,
+        CampaignDirective::SubmitContinuation(ContinuationReason::Ordinary)
+    );
+    assert!(matches!(
+        reduce_turn_aborted(&mut progress)?,
+        CampaignDirective::Block(_)
+    ));
+
+    progress.begin_interrupt(ContinuationReason::NewAttempt, Instant::now())?;
+    assert_eq!(
+        reduce_turn_aborted(&mut progress)?,
+        CampaignDirective::SubmitContinuation(ContinuationReason::NewAttempt)
+    );
+    Ok(())
+}
+
+#[test]
+fn accepted_outcomes_continue_losses_but_finish_campaign_terminals() -> anyhow::Result<()> {
+    let loss = reported_outcome(OutcomeDraft::Loss {
+        observation_reference: "sha256:loss".to_string(),
+        visible_evidence_summary: "The loss screen is visible".to_string(),
+        lesson: "The build lacked mobility".to_string(),
+        strategy: StrategyRecord {
+            summary: "Prioritize mobility".to_string(),
+            confirmed_mechanics: Vec::new(),
+            failed_approaches: vec!["Static defense".to_string()],
+            shop_and_boss_notes: Vec::new(),
+            next_attempt_priorities: vec!["Buy movement".to_string()],
+        },
+    });
+    assert_eq!(
+        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &loss)?,
+        CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt)
+    );
+
+    let win = reported_outcome(OutcomeDraft::Win {
+        observation_reference: "sha256:win".to_string(),
+        visible_evidence_summary: "The victory screen is visible".to_string(),
+        lesson: "The boss is defeated".to_string(),
+    });
+    assert_eq!(
+        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &win)?,
+        CampaignDirective::Complete(CampaignTerminalState::Won)
+    );
+
+    let terminal_block = reported_outcome(OutcomeDraft::TerminalBlock {
+        observation_reference: "sha256:block".to_string(),
+        visible_evidence_summary: "The helper disconnected".to_string(),
+        lesson: "Physical state is unresolved".to_string(),
+    });
+    assert_eq!(
+        reduce_accepted_outcome(
+            &mut CampaignProgress::new(limits()),
+            &terminal_block,
+        )?,
+        CampaignDirective::Block("The helper disconnected".to_string())
+    );
     Ok(())
 }

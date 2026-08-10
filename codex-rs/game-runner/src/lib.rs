@@ -1,6 +1,7 @@
 mod action_batch;
 mod campaign;
 mod campaign_progress;
+mod campaign_prompt;
 mod campaign_report;
 mod campaign_tools;
 mod config;

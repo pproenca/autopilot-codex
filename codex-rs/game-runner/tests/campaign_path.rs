@@ -47,15 +47,6 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
         ]),
     )
     .await;
-    let completion_response = mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("response-2"),
-            responses::ev_assistant_message("message-2", "Stage 4A canary complete."),
-            responses::ev_completed("response-2"),
-        ]),
-    )
-    .await;
     let base = test_codex()
         .with_model_info_override("gpt-5.6-sol", |model| model.supports_search_tool = false)
         .with_config(configure_runner_surface)
@@ -194,12 +185,6 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
         assert!(description.contains(required), "missing `{required}`");
     }
     assert!(!description.contains("mcp__game__zoom"));
-    assert!(
-        completion_response
-            .single_request()
-            .custom_tool_call_output(EXEC_CALL_ID)
-            .is_object()
-    );
     server.verify().await;
     Ok(())
 }
