@@ -1,10 +1,13 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpToolCallPolicyContributor;
 use codex_extension_api::McpToolCallPolicyDecision;
 use codex_extension_api::McpToolCallPolicyFuture;
 use codex_extension_api::McpToolCallPolicyInput;
+use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ResponseInputItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
@@ -15,6 +18,9 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::mcp_tool_call_policy::apply_mcp_tool_call_policies;
+use crate::tools::context::McpToolOutput;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
 
 struct AddFields {
     expected_existing_key: Option<&'static str>,
@@ -128,14 +134,14 @@ async fn policy_denial_returns_model_visible_reason() {
 
 #[tokio::test]
 async fn policy_denial_bounds_model_visible_reason() {
-    let oversized_reason = "record a plan before moving. ".repeat(4_096);
-    let oversized_server_name = "game".repeat(4_096);
-    let oversized_tool_name = "click".repeat(4_096);
+    let oversized_reason = "\0record a plan before moving.\\\"".repeat(4_096);
+    let oversized_server_name = "\0game\\\"".repeat(4_096);
+    let oversized_tool_name = "\0click\\\"".repeat(4_096);
     let expected_message = truncate_text(
         &format!(
             "MCP call policy denied `{oversized_server_name}/{oversized_tool_name}`: {oversized_reason}"
         ),
-        TruncationPolicy::Tokens(432),
+        TruncationPolicy::Tokens(64),
     );
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     builder.mcp_tool_call_policy_contributor(Arc::new(Deny(oversized_reason)));
@@ -151,7 +157,26 @@ async fn policy_denial_bounds_model_visible_reason() {
     )
     .await
     .expect_err("a denied call should return an error");
-    let model_output = format!("tool call error: {error:?}\nWall time: 0.001 seconds");
+    let response = McpToolOutput {
+        result: CallToolResult::from_error_text(format!("tool call error: {error:?}")),
+        tool_input: serde_json::json!({}),
+        wall_time: Duration::from_millis(1),
+        original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+    }
+    .to_response_item(
+        "call-1",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        panic!("MCP denial should produce a function-call output");
+    };
+    let model_output = output
+        .body
+        .to_text()
+        .expect("MCP denial output should serialize as text");
 
     assert_eq!(error.to_string(), expected_message);
     assert!(

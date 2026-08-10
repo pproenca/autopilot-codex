@@ -10,7 +10,7 @@ use serde_json::map::Entry;
 
 use crate::config::Config;
 
-const DENIAL_MESSAGE_TRUNCATION_BUDGET_TOKENS: usize = 432;
+const DENIAL_MESSAGE_TRUNCATION_BUDGET_TOKENS: usize = 64;
 
 pub(crate) async fn apply_mcp_tool_call_policies(
     extensions: &ExtensionRegistry<Config>,
@@ -57,8 +57,10 @@ pub(crate) async fn apply_mcp_tool_call_policies(
             McpToolCallPolicyDecision::Deny { reason } => {
                 let message =
                     format!("MCP call policy denied `{server_name}/{tool_name}`: {reason}");
-                // Reserve room for the truncation marker plus the outer tool-error and wall-time
-                // wrappers so the complete model-visible output remains below 512 tokens.
+                // A retained control character can expand to six bytes when the MCP content array
+                // is serialized as JSON. This conservative source budget also leaves room for the
+                // truncation marker plus the outer tool-error and wall-time wrappers, keeping the
+                // complete model-visible output below 512 tokens.
                 let message = truncate_text(
                     &message,
                     TruncationPolicy::Tokens(DENIAL_MESSAGE_TRUNCATION_BUDGET_TOKENS),
