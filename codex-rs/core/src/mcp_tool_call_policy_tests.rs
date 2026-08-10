@@ -129,22 +129,34 @@ async fn policy_denial_returns_model_visible_reason() {
 #[tokio::test]
 async fn policy_denial_bounds_model_visible_reason() {
     let oversized_reason = "record a plan before moving. ".repeat(4_096);
-    let expected_reason = truncate_text(&oversized_reason, TruncationPolicy::Tokens(480));
+    let oversized_server_name = "game".repeat(4_096);
+    let oversized_tool_name = "click".repeat(4_096);
+    let expected_message = truncate_text(
+        &format!(
+            "MCP call policy denied `{oversized_server_name}/{oversized_tool_name}`: {oversized_reason}"
+        ),
+        TruncationPolicy::Tokens(432),
+    );
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     builder.mcp_tool_call_policy_contributor(Arc::new(Deny(oversized_reason)));
     let registry = builder.build();
 
-    let error = apply_mcp_tool_call_policies(&registry, "game", "click", "call-1", None, None)
-        .await
-        .expect_err("a denied call should return an error");
+    let error = apply_mcp_tool_call_policies(
+        &registry,
+        &oversized_server_name,
+        &oversized_tool_name,
+        "call-1",
+        None,
+        None,
+    )
+    .await
+    .expect_err("a denied call should return an error");
+    let model_output = format!("tool call error: {error:?}\nWall time: 0.001 seconds");
 
-    assert_eq!(
-        error.to_string(),
-        format!("MCP call policy denied `game/click`: {expected_reason}")
-    );
+    assert_eq!(error.to_string(), expected_message);
     assert!(
-        approx_token_count(&error.to_string()) <= 512,
-        "the complete model-visible denial must fit its token budget"
+        approx_token_count(&model_output) <= 512,
+        "the wrapped model-visible denial must fit its token budget"
     );
 }
 
