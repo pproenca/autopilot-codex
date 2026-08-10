@@ -88,7 +88,7 @@ async fn invalid_helper_bundle_is_rejected_before_launch() {
     assert!(matches!(
         error,
         RunnerError::InvalidHelperApp { path }
-            if path == PathBuf::from("/signed/AutoPilotHelper.app")
+            if path.as_path() == Path::new("/signed/AutoPilotHelper.app")
     ));
 }
 

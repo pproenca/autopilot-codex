@@ -3,8 +3,8 @@ mod helper;
 mod observation;
 mod policy;
 
-pub use config::GENERATION;
 pub use config::GAME_SERVER_NAME;
+pub use config::GENERATION;
 pub use config::MODEL;
 pub use config::RunnerDeployment;
 pub use config::RunnerError;

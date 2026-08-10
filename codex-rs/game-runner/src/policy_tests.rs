@@ -43,10 +43,22 @@ async fn mutation_and_unknown_calls_are_denied_and_audited() {
     let policy = GameCallPolicy::new("epoch-1".to_string(), 1);
     let request_meta = serde_json::Map::new();
     for (tool_name, reason) in [
-        ("click", "game tool `click` is mutating and disabled during observation"),
-        ("drag", "game tool `drag` is mutating and disabled during observation"),
-        ("focus_click", "game tool `focus_click` is mutating and disabled during observation"),
-        ("unexpected_tool", "unknown game tool `unexpected_tool` is disabled during observation"),
+        (
+            "click",
+            "game tool `click` is mutating and disabled during observation",
+        ),
+        (
+            "drag",
+            "game tool `drag` is mutating and disabled during observation",
+        ),
+        (
+            "focus_click",
+            "game tool `focus_click` is mutating and disabled during observation",
+        ),
+        (
+            "unexpected_tool",
+            "unknown game tool `unexpected_tool` is disabled during observation",
+        ),
     ] {
         assert_eq!(
             policy

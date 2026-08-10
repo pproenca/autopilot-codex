@@ -42,10 +42,7 @@ impl HelperLauncher {
         }
     }
 
-    pub async fn ensure_serving(
-        &self,
-        deployment: &RunnerDeployment,
-    ) -> Result<(), RunnerError> {
+    pub async fn ensure_serving(&self, deployment: &RunnerDeployment) -> Result<(), RunnerError> {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = deployment;
@@ -62,7 +59,11 @@ impl HelperLauncher {
                 }
             })?;
             if !helper_metadata.is_dir()
-                || deployment.helper_app.extension().and_then(|ext| ext.to_str()) != Some("app")
+                || deployment
+                    .helper_app
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    != Some("app")
             {
                 return Err(RunnerError::InvalidHelperApp {
                     path: deployment.helper_app.clone(),

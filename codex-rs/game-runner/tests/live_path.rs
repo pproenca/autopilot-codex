@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use codex_core_api::Config;
+use codex_core_api::ExtensionRegistryBuilder;
 use codex_core_api::Feature;
 use codex_core_api::Features;
 use codex_core_api::McpServerConfig;
 use codex_core_api::WebSearchMode;
-use codex_core_api::ExtensionRegistryBuilder;
-use codex_game_runner::GENERATION;
 use codex_game_runner::GAME_SERVER_NAME;
+use codex_game_runner::GENERATION;
 use codex_game_runner::GameCallPolicy;
 use codex_game_runner::ModelObservation;
 use codex_game_runner::ObservationLimits;
@@ -149,7 +149,10 @@ text(JSON.stringify(result.structuredContent));"#,
     let request = tool_response.single_request();
     assert!(request.body_contains_text("Gambonanza"));
     let body = request.body_json();
-    assert_eq!(body["text"]["format"]["schema"]["additionalProperties"], false);
+    assert_eq!(
+        body["text"]["format"]["schema"]["additionalProperties"],
+        false
+    );
     let description = exec_description(&body)?;
     assert!(description.contains("mcp__game__get_app_state"));
     for forbidden in [
@@ -159,9 +162,17 @@ text(JSON.stringify(result.structuredContent));"#,
         "### `spawn_agent`",
         "project instructions",
     ] {
-        assert!(!description.contains(forbidden), "unexpected `{forbidden}` tool surface");
+        assert!(
+            !description.contains(forbidden),
+            "unexpected `{forbidden}` tool surface"
+        );
     }
-    assert!(completion_response.single_request().custom_tool_call_output(CALL_ID).is_object());
+    assert!(
+        completion_response
+            .single_request()
+            .custom_tool_call_output(CALL_ID)
+            .is_object()
+    );
     assert_eq!(
         helper_trace.methods,
         vec![
@@ -181,13 +192,24 @@ fn configure_runner_surface(config: &mut Config, game_server: McpServerConfig) {
     features.enable(Feature::CodeMode);
     features.enable(Feature::CodeModeHost);
     features.enable(Feature::CodeModeOnly);
-    config.features.set(features).expect("set code-mode features");
+    assert!(
+        config.features.set(features).is_ok(),
+        "set code-mode features"
+    );
     config.code_mode.excluded_tool_namespaces = vec!["functions".to_string()];
-    config.mcp_servers.set(HashMap::from([(
-        GAME_SERVER_NAME.to_string(),
-        game_server,
-    )])).expect("set game MCP server");
-    config.web_search_mode.set(WebSearchMode::Disabled).expect("disable web search");
+    assert!(
+        config
+            .mcp_servers
+            .set(HashMap::from([
+                (GAME_SERVER_NAME.to_string(), game_server,)
+            ]))
+            .is_ok(),
+        "set game MCP server"
+    );
+    assert!(
+        config.web_search_mode.set(WebSearchMode::Disabled).is_ok(),
+        "disable web search"
+    );
     config.ephemeral = false;
     config.agents_enabled = false;
     config.project_doc_max_bytes = 0;
@@ -207,7 +229,11 @@ fn exec_description(body: &Value) -> anyhow::Result<&str> {
         .as_array()
         .and_then(|input| input.iter().find(|item| item["role"] == "developer"))
         .and_then(|developer| developer["tools"].as_array())
-        .and_then(|namespaces| namespaces.iter().find(|namespace| namespace["name"] == "functions"))
+        .and_then(|namespaces| {
+            namespaces
+                .iter()
+                .find(|namespace| namespace["name"] == "functions")
+        })
         .and_then(|namespace| namespace["tools"].as_array())
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "exec"))
         .and_then(|tool| tool["description"].as_str())
@@ -274,7 +300,9 @@ async fn serve_fake_game_mcp(listener: UnixListener) -> anyhow::Result<HelperTra
 }
 
 fn method(message: &Value) -> anyhow::Result<&str> {
-    message["method"].as_str().context("MCP message has no method")
+    message["method"]
+        .as_str()
+        .context("MCP message has no method")
 }
 
 async fn next_message(

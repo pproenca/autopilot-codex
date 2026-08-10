@@ -128,10 +128,7 @@ async fn run(args: Args) -> anyhow::Result<ObservationReport> {
         .context("resolve installation identity")
         .map_err(thread_startup_error)?;
 
-    let policy = Arc::new(GameCallPolicy::new(
-        Uuid::new_v4().to_string(),
-        GENERATION,
-    ));
+    let policy = Arc::new(GameCallPolicy::new(Uuid::new_v4().to_string(), GENERATION));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.mcp_tool_call_policy_contributor(policy.clone());
     let thread_manager = ThreadManager::new(
@@ -185,7 +182,10 @@ async fn run(args: Args) -> anyhow::Result<ObservationReport> {
 
     match (observation, cleanup_errors.is_empty()) {
         (Ok(report), true) => Ok(report),
-        (Ok(_), false) => bail!("game observation cleanup failed: {}", cleanup_errors.join("; ")),
+        (Ok(_), false) => bail!(
+            "game observation cleanup failed: {}",
+            cleanup_errors.join("; ")
+        ),
         (Err(primary), true) => Err(primary.into()),
         (Err(primary), false) => Err(RunnerError::RunAndCleanupFailed {
             primary: Box::new(primary),

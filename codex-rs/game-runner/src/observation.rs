@@ -151,10 +151,14 @@ impl ObservationAccumulator {
                     && event.invocation.tool == "get_app_state"
                     && event.is_success() =>
             {
-                self.observation = event.result.as_ref().ok().map(|result| ObservationEvidence {
-                    call_id: event.call_id.clone(),
-                    reference: observation_reference(result),
-                });
+                self.observation = event
+                    .result
+                    .as_ref()
+                    .ok()
+                    .map(|result| ObservationEvidence {
+                        call_id: event.call_id.clone(),
+                        reference: observation_reference(result),
+                    });
             }
             _ => {}
         }

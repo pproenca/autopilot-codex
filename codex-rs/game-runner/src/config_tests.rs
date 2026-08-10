@@ -98,9 +98,7 @@ fn project(config: &Config) -> ConfigProjection {
         .get("game")
         .expect("fixed runner config must contain the game MCP server");
     let (game_command, game_args) = match &game.transport {
-        McpServerTransportConfig::Stdio { command, args, .. } => {
-            (command.clone(), args.clone())
-        }
+        McpServerTransportConfig::Stdio { command, args, .. } => (command.clone(), args.clone()),
         McpServerTransportConfig::StreamableHttp { .. } => {
             panic!("game MCP server must use the stdio bridge")
         }
