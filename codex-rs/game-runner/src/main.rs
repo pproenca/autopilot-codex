@@ -113,7 +113,7 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignR
         Arc::clone(&gate),
     ));
     let runtime = RunnerRuntime::start(config, Arc::clone(&policy), CampaignTools::specs()).await?;
-    let campaign = CampaignRun::new(CampaignLimits::stage_4a())
+    let campaign = CampaignRun::new(CampaignLimits::stage_4b1())
         .execute(
             &runtime.thread,
             &runtime.session_configured,

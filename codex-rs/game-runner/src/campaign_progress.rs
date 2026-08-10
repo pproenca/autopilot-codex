@@ -27,10 +27,6 @@ impl CampaignLimits {
             interrupt_timeout: std::time::Duration::from_secs(30),
         }
     }
-
-    pub fn stage_4a() -> Self {
-        Self::stage_4b1()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
