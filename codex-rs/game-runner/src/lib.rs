@@ -10,6 +10,7 @@ mod observation;
 mod planned_action;
 mod policy;
 mod runtime;
+mod strategy;
 
 pub use campaign::CampaignLimits;
 pub use campaign::CampaignRun;
@@ -58,3 +59,5 @@ pub use policy::OwnerLease;
 pub use policy::PolicyAudit;
 pub use runtime::RunnerRuntime;
 pub use runtime::ShutdownMode;
+pub use strategy::StrategyRecord;
+pub use strategy::StrategyValidationError;
