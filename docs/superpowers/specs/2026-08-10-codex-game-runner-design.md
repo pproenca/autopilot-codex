@@ -88,6 +88,13 @@ socket. The bridge forwards bytes without interpreting MCP, so it eliminates
 AutoPilot's Elixir HTTP gateway without adding a second protocol or a new
 global MCP transport configuration.
 
+For GPT-5.6-Sol, Codex exposes the discovered game tools inside its existing
+code-mode `exec` tool. Model-authored JavaScript calls bindings such as
+`tools.mcp__game__get_app_state(...)`; Codex then performs the normal MCP call
+and returns the result to the code-mode continuation. The runner should reuse
+this model-visible surface instead of adding direct Responses tools or a
+Sol-specific dispatcher.
+
 The game MCP surface initially remains limited to:
 
 - `get_app_state`

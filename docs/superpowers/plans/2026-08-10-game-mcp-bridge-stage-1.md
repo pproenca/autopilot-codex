@@ -31,14 +31,18 @@ The single integration test must prove this complete sequence:
 
 ```text
 mock Responses API
-  -> Codex thread advertises mcp__game/get_app_state
-  -> model emits namespaced tool call
+  -> Codex thread includes mcp__game__get_app_state in the code-mode exec declaration
+  -> model emits an exec call that invokes tools.mcp__game__get_app_state
   -> Codex stdio MCP launcher starts `codex stdio-to-uds <socket>`
   -> bridge relays canonical MCP initialize/list/call messages
   -> fake socket helper returns structured observation
-  -> Codex sends that tool result in the next Responses request
+  -> code mode emits the structured observation in the next Responses request
   -> turn completes
 ```
+
+This code-mode path is required for GPT-5.6-Sol. Do not model the game tool as
+a direct top-level Responses function; reuse Codex's generated JavaScript MCP
+binding and existing code-mode host.
 
 The fake helper must support only the protocol needed by this test:
 
@@ -84,12 +88,10 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_config::types::McpServerConfig;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::EventMsg;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -102,7 +104,6 @@ use tokio::net::UnixListener;
 use tokio::net::unix::OwnedWriteHalf;
 
 const SERVER_NAME: &str = "game";
-const NAMESPACE: &str = "mcp__game";
 const CALL_ID: &str = "game-observation-1";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -183,11 +184,13 @@ async fn codex_calls_game_tool_through_stdio_to_uds() -> anyhow::Result<()> {
         &responses_server,
         responses::sse(vec![
             responses::ev_response_created("response-1"),
-            responses::ev_function_call_with_namespace(
+            responses::ev_custom_tool_call(
                 CALL_ID,
-                NAMESPACE,
-                "get_app_state",
-                "{}",
+                "exec",
+                r#"
+const result = await tools.mcp__game__get_app_state({});
+text(JSON.stringify(result.structuredContent));
+"#,
             ),
             responses::ev_completed("response-1"),
         ]),
@@ -204,6 +207,7 @@ async fn codex_calls_game_tool_through_stdio_to_uds() -> anyhow::Result<()> {
     .await;
 
     let codex_bin = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let code_mode_host_bin = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
     let game_server = serde_json::from_value::<McpServerConfig>(json!({
         "command": codex_bin,
         "args": ["stdio-to-uds", socket_path],
@@ -213,6 +217,7 @@ async fn codex_calls_game_tool_through_stdio_to_uds() -> anyhow::Result<()> {
         "tool_timeout_sec": 5,
     }))?;
     let fixture = test_codex()
+        .with_code_mode_host_program(code_mode_host_bin)
         .with_model_info_override("gpt-5.6-sol", |model| model.supports_search_tool = false)
         .with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();
@@ -232,26 +237,17 @@ async fn codex_calls_game_tool_through_stdio_to_uds() -> anyhow::Result<()> {
             PermissionProfile::read_only(),
         )
         .await?;
-    wait_for_event(&fixture.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
     let first_request = tool_response.single_request();
     assert!(
-        responses::namespace_child_tool(
-            &first_request.body_json(),
-            NAMESPACE,
-            "get_app_state",
-        )
-        .is_some()
+        first_request
+            .body_json()
+            .to_string()
+            .contains("mcp__game__get_app_state")
     );
-    let output = completion_response
-        .single_request()
-        .function_call_output_text(CALL_ID)
-        .context("missing game MCP result in continuation request")?;
-    assert!(output.contains("Gambonanza"));
-    assert!(output.contains("obs-1"));
+    let completion_request = completion_response.single_request();
+    let output = completion_request.custom_tool_call_output(CALL_ID);
+    assert!(output.to_string().contains("Gambonanza"));
+    assert!(output.to_string().contains("obs-1"));
 
     assert_eq!(
         helper_task.await.context("fake game MCP task panicked")??,
