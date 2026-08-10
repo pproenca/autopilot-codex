@@ -3208,6 +3208,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "clap",
+ "codex-code-mode",
  "codex-core-api",
  "codex-uds",
  "codex-utils-cargo-bin",

@@ -1,6 +1,8 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
+use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_api::AuthManager;
 use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::CodexThread;
@@ -55,6 +57,30 @@ impl RunnerRuntime {
         policy: Arc<GameCallPolicy>,
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Result<Self, RunnerError> {
+        Self::start_inner(config, policy, dynamic_tools, None).await
+    }
+
+    pub async fn start_with_code_mode_host(
+        config: Config,
+        policy: Arc<GameCallPolicy>,
+        dynamic_tools: Vec<DynamicToolSpec>,
+        code_mode_host_program: PathBuf,
+    ) -> Result<Self, RunnerError> {
+        Self::start_inner(
+            config,
+            policy,
+            dynamic_tools,
+            Some(code_mode_host_program),
+        )
+        .await
+    }
+
+    async fn start_inner(
+        config: Config,
+        policy: Arc<GameCallPolicy>,
+        dynamic_tools: Vec<DynamicToolSpec>,
+        code_mode_host_program: Option<PathBuf>,
+    ) -> Result<Self, RunnerError> {
         let state_db = init_state_db(&config).await;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
@@ -97,6 +123,12 @@ impl RunnerRuntime {
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
         );
+        let thread_manager = match code_mode_host_program {
+            Some(program) => thread_manager.with_code_mode_session_provider(Arc::new(
+                ProcessOwnedCodeModeSessionProvider::with_host_program(program),
+            )),
+            None => thread_manager,
+        };
         let NewThread {
             thread_id,
             thread,
