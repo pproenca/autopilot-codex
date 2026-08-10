@@ -79,12 +79,14 @@ The helper continues to launch through LaunchServices as a signed app. The
 runner never launches its bare executable because doing so changes the TCC
 identity.
 
-### Direct Unix-socket MCP
+### Existing stdio-to-UDS MCP bridge
 
-Add Unix-socket transport at Codex's existing MCP connection-manager boundary.
-The runner connects directly to the helper's canonical MCP JSON-RPC socket.
-This eliminates AutoPilot's Elixir HTTP gateway without creating a replacement
-proxy protocol.
+Reuse the existing `codex-stdio-to-uds` byte bridge and cross-platform
+`codex-uds` stream. Codex launches the bridge through its existing stdio MCP
+transport, and the bridge connects to the helper's canonical MCP JSON-RPC
+socket. The bridge forwards bytes without interpreting MCP, so it eliminates
+AutoPilot's Elixir HTTP gateway without adding a second protocol or a new
+global MCP transport configuration.
 
 The game MCP surface initially remains limited to:
 
@@ -119,7 +121,8 @@ Do not depend on the general Codex TUI application state or composer. Reuse or
 extract focused presentation helpers when that is smaller than importing the
 full TUI product.
 
-The one new core integration point is a narrow MCP pre-call policy hook at the
+The one new core integration point, introduced only with the plan gate in a
+later delivery stage, is a narrow MCP pre-call policy hook at the
 connection-manager boundary. The runner installs a policy that can reject a
 game mutation before dispatch when no valid plan exists. Model context,
 history construction, retries, and tool-result persistence remain Codex-owned.
@@ -394,10 +397,10 @@ bottleneck.
 ## Scope Control
 
 The initial implementation should add only the thin runner, the narrow MCP
-policy and Unix-socket seams, and the extracted helper. It should not begin by
-deleting unused Codex crates. Once the runner wins and its dependency closure
-is understood, remove unreachable products and workspace members in separate,
-mechanical stages.
+policy seam, wiring through the existing stdio-to-UDS bridge, and the extracted
+helper. It should not begin by deleting unused Codex crates. Once the runner
+wins and its dependency closure is understood, remove unreachable products and
+workspace members in separate, mechanical stages.
 
 This sequence preserves upstream knowledge while avoiding a large, hard-to-
 diagnose source-amputation project before gameplay value exists.
@@ -407,9 +410,9 @@ diagnose source-amputation project before gameplay value exists.
 This system is intentionally delivered as separate reviewable changes rather
 than one large patch:
 
-1. Add and test Unix-socket MCP transport in the existing Codex MCP boundary,
-   then prove the unmodified Codex agent can call the current external helper
-   directly.
+1. Add canonical MCP coverage to the existing stdio-to-UDS bridge, then prove
+   the unmodified Codex agent can call the current external helper through that
+   bridge.
 2. Add a headless `codex-game-runner` vertical slice using `codex-core-api`, a
    persistent thread, fixed game-only configuration, and automatic
    continuation. Keep using the current external helper during this stage.
@@ -428,7 +431,6 @@ than one large patch:
 The implementation plan following this design covers Stage 1 first. Each later
 stage gets a focused follow-up plan after the preceding seam is demonstrated.
 
-The game runner and helper are explicitly macOS-specific. Shared Codex MCP
-configuration and transport types must continue to compile on Linux, macOS,
-and Windows; unsupported local transport use fails clearly at runtime on
-platforms that cannot provide it.
+The game runner and helper are explicitly macOS-specific. The reused
+`codex-uds` and stdio bridge remain cross-platform and must continue to compile
+and pass their existing tests on Linux, macOS, and Windows.
