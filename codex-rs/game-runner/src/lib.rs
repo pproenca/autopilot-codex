@@ -1,3 +1,4 @@
+mod campaign_tools;
 mod config;
 mod decision;
 mod helper;
@@ -5,6 +6,9 @@ mod image_bridge;
 mod observation;
 mod policy;
 
+pub use campaign_tools::CAMPAIGN_TOOL_NAMESPACE;
+pub use campaign_tools::CampaignToolError;
+pub use campaign_tools::CampaignTools;
 pub use config::GAME_SERVER_NAME;
 pub use config::GENERATION;
 pub use config::MODEL;
