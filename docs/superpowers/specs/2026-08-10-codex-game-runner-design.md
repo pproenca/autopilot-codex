@@ -107,6 +107,42 @@ The game MCP surface initially remains limited to:
 The runner exposes its two local tools through Codex's existing dynamic-tool
 mechanism rather than adding them to the Swift helper.
 
+### MCP call policy extension
+
+The helper's canonical MCP server requires three flat `_meta` fields on every
+tool call: `epoch`, `generation`, and `call_id`. AutoPilot previously created
+them inside its campaign and gateway layers. Codex already provides a unique
+call ID and thread identity, but it must not globally synthesize AutoPilot
+metadata for unrelated MCP servers.
+
+Add one host-only extension point through Codex's existing extension registry.
+An MCP call policy contributor receives the server name, tool name, Codex call
+ID, read-only arguments, and the current request metadata. It may either deny
+the call with a model-visible reason or add new request metadata fields. Added
+fields cannot overwrite metadata already owned by Codex or another
+contributor. With no contributor registered, MCP behavior is byte-for-byte
+unchanged.
+
+Codex evaluates contributors in registration order after approval and argument
+normalization, inside the prepared call's catalog authority, immediately
+before dispatch. This placement lets the later plan gate atomically consume a
+plan before a mutation without moving MCP lifecycle ownership out of Codex.
+Contributor failures reject the call; they never fall through to the helper.
+
+The game runner registers the only initial policy. It applies solely to the
+configured `game` server and adds:
+
+- a random `epoch` persisted for the active campaign;
+- a nonnegative `generation`, incremented before Resume and after helper
+  reconnection;
+- `call_id`, copied exactly from Codex's call ID.
+
+Pause blocks new game calls before interrupting the active turn. Stop closes
+the thread and starts the next campaign with a new epoch. The runner configures
+the game server's approval mode as `approve`; its fixed server and tool
+allow-lists plus the in-process policy are the unattended safety boundary.
+The stdio-to-UDS bridge remains a byte-transparent transport.
+
 ## Codex Reuse Boundary
 
 Reuse the following current Codex facilities:
@@ -128,11 +164,11 @@ Do not depend on the general Codex TUI application state or composer. Reuse or
 extract focused presentation helpers when that is smaller than importing the
 full TUI product.
 
-The one new core integration point, introduced only with the plan gate in a
-later delivery stage, is a narrow MCP pre-call policy hook at the
-connection-manager boundary. The runner installs a policy that can reject a
-game mutation before dispatch when no valid plan exists. Model context,
-history construction, retries, and tool-result persistence remain Codex-owned.
+The one new core integration point is the narrow extension-registry MCP call
+policy described above. The runner first uses it for helper ownership metadata,
+then extends the same game-only policy to reject a mutation when no valid plan
+exists. Model context, history construction, retries, and tool-result
+persistence remain Codex-owned.
 
 ## Campaign State Machine
 
@@ -359,8 +395,10 @@ does not select between prompts, planners, models, or gameplay policies.
 - Campaign state transitions and crash recovery.
 - Plan validity, consumption, and invalidation.
 - Rejection of every unplanned mutation.
+- MCP policy contributor ordering, denial, metadata addition, and collision
+  rejection; the no-contributor path must preserve the original call.
 - Codex integration tests using existing mocked Responses helpers and a fake
-  MCP game server.
+  MCP game server that requires the helper's owner-lease metadata.
 - Pause and Stop during reads, clicks, and atomic drags.
 - Stale observations, duplicate operation IDs, indeterminate mutations,
   helper disconnects, and model turn completion without victory.
@@ -417,26 +455,33 @@ diagnose source-amputation project before gameplay value exists.
 This system is intentionally delivered as separate reviewable changes rather
 than one large patch:
 
-1. Add canonical MCP coverage to the existing stdio-to-UDS bridge, then prove
-   the unmodified Codex agent can call the current external helper through that
-   bridge.
-2. Add a headless `codex-game-runner` vertical slice using `codex-core-api`, a
-   persistent thread, fixed game-only configuration, and automatic
-   continuation. Keep using the current external helper during this stage.
-3. Add the dynamic `record_plan` and `report_outcome` tools plus the MCP
-   pre-call policy hook, campaign state machine, bounded strategy fragment, and
-   fake-game vertical integration coverage.
-4. Add the focused TUI and its snapshots on top of the already tested headless
+1. Add canonical MCP coverage to the existing stdio-to-UDS bridge and prove
+   the complete Sol code-mode transport path with a hermetic helper. A
+   read-only real-helper probe must record any external contract that prevents
+   an unmodified Codex client from succeeding.
+2. Add the extension-registry MCP call policy seam. Extend the hermetic helper
+   to require `epoch`, `generation`, and `call_id`, and prove the runner policy
+   supplies them without changing generic MCP calls or the byte bridge.
+3. Add a headless `codex-game-runner` observation slice using `codex-core-api`,
+   a fixed game-only configuration, and the owner-lease policy. Keep using the
+   current signed external helper and require a successful GPT-5.6-Sol live
+   observation before proceeding.
+4. Add a persistent thread, automatic continuation, the dynamic `record_plan`
+   and `report_outcome` tools, plan enforcement in the same MCP policy,
+   campaign state, bounded strategy, and fake-game vertical coverage.
+5. Add the focused TUI and its snapshots on top of the already tested headless
    campaign core.
-5. Import and package `GameControlHelper.app`, preserving the CUCtl tests and
+6. Import and package `GameControlHelper.app`, preserving the CUCtl tests and
    signed LaunchServices launch path.
-6. Run real-game campaigns until the first verified win, then tune only from
+7. Run real-game campaigns until the first verified win, then tune only from
    complete traces.
-7. Remove unreachable Codex products and workspace members in later mechanical
+8. Remove unreachable Codex products and workspace members in later mechanical
    changes after the winning runner's dependency closure is known.
 
-The implementation plan following this design covers Stage 1 first. Each later
-stage gets a focused follow-up plan after the preceding seam is demonstrated.
+Stage 1 is the committed transport characterization. The next implementation
+plan covers Stage 2 only: the generic extension seam and hermetic owner-lease
+policy proof. Each later stage gets a focused follow-up plan after the
+preceding seam is demonstrated.
 
 The game runner and helper are explicitly macOS-specific. The reused
 `codex-uds` and stdio bridge remain cross-platform and must continue to compile
