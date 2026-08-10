@@ -1,9 +1,3 @@
-use std::fs::File;
-use std::io;
-use std::io::Read;
-use std::path::Path;
-use std::path::PathBuf;
-
 use anyhow::Context;
 use anyhow::ensure;
 use base64::Engine;
@@ -12,15 +6,39 @@ use serde_json::Value;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
+use std::fs::File;
+use std::io;
+use std::io::Read;
+use std::path::Path;
+use std::path::PathBuf;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+
+use crate::focus::ApplicationFocus;
+use crate::focus::FocusTracker;
+use crate::focus::MacOsApplicationFocus;
+use crate::focus::NoApplicationFocus;
 
 const MAX_JPEG_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_HELPER_LINE_BYTES: usize = 1024 * 1024;
 
 /// Relays MCP over a helper socket and turns verified screenshot blobs into images.
-pub async fn run_image_bridge(socket_path: &Path) -> anyhow::Result<()> {
+pub async fn run_image_bridge(socket_path: &Path, target_app: &str) -> anyhow::Result<()> {
+    run_image_bridge_with_focus(socket_path, MacOsApplicationFocus::new(target_app)).await
+}
+
+/// Runs the real UDS/image bridge without desktop focus changes for hermetic fixtures.
+pub async fn run_image_bridge_without_focus(socket_path: &Path) -> anyhow::Result<()> {
+    run_image_bridge_with_focus(socket_path, NoApplicationFocus).await
+}
+
+async fn run_image_bridge_with_focus<F>(socket_path: &Path, app_focus: F) -> anyhow::Result<()>
+where
+    F: ApplicationFocus + 'static,
+{
     let stream = codex_uds::UnixStream::connect(socket_path)
         .await
         .with_context(|| format!("failed to connect to socket at {}", socket_path.display()))?;
@@ -29,12 +47,43 @@ pub async fn run_image_bridge(socket_path: &Path) -> anyhow::Result<()> {
         .unwrap_or_else(|| Path::new("."))
         .join("screenshot-spool");
     let (socket_reader, mut socket_writer) = tokio::io::split(stream);
+    let (focus_sender, focus_receiver) = mpsc::channel(1);
+    let focus_task = tokio::spawn(run_focus_actor(
+        FocusTracker::new(app_focus),
+        focus_receiver,
+    ));
 
-    let copy_stdin_to_socket = async {
-        let mut stdin = tokio::io::stdin();
-        tokio::io::copy(&mut stdin, &mut socket_writer)
-            .await
-            .context("failed to copy MCP requests to the game helper")?;
+    let request_focus = focus_sender.clone();
+    let copy_stdin_to_socket = async move {
+        let mut stdin = BufReader::new(tokio::io::stdin());
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let count = stdin
+                .read_until(b'\n', &mut line)
+                .await
+                .context("failed to read an MCP request")?;
+            if count == 0 {
+                break;
+            }
+            ensure!(
+                line.len() <= MAX_HELPER_LINE_BYTES,
+                "game MCP request exceeded {MAX_HELPER_LINE_BYTES} bytes"
+            );
+            let request = serde_json::from_slice::<Value>(&line)
+                .context("game MCP client sent malformed JSON")?;
+            send_focus_event(&request_focus, FocusEvent::Before(request))
+                .await
+                .context("prepare application focus for game input")?;
+            socket_writer
+                .write_all(&line)
+                .await
+                .context("failed to send an MCP request to the game helper")?;
+            socket_writer
+                .flush()
+                .await
+                .context("failed to flush a game helper MCP request")?;
+        }
         if let Err(error) = socket_writer.shutdown().await
             && error.kind() != io::ErrorKind::NotConnected
         {
@@ -42,7 +91,8 @@ pub async fn run_image_bridge(socket_path: &Path) -> anyhow::Result<()> {
         }
         anyhow::Ok(())
     };
-    let copy_socket_to_stdout = async {
+    let response_focus = focus_sender.clone();
+    let copy_socket_to_stdout = async move {
         let mut reader = BufReader::new(socket_reader);
         let mut stdout = tokio::io::stdout();
         let mut line = Vec::new();
@@ -61,6 +111,9 @@ pub async fn run_image_bridge(socket_path: &Path) -> anyhow::Result<()> {
             );
             let mut response = serde_json::from_slice::<Value>(&line)
                 .context("game helper returned malformed MCP JSON")?;
+            send_focus_event(&response_focus, FocusEvent::After(response.clone()))
+                .await
+                .context("restore application focus after game input")?;
             adopt_spooled_image(&mut response, &spool_root)?;
             let mut encoded = serde_json::to_vec(&response).context("encode game MCP response")?;
             encoded.push(b'\n');
@@ -73,8 +126,60 @@ pub async fn run_image_bridge(socket_path: &Path) -> anyhow::Result<()> {
         anyhow::Ok(())
     };
 
-    tokio::try_join!(copy_stdin_to_socket, copy_socket_to_stdout)?;
+    let transfer_result = tokio::try_join!(copy_stdin_to_socket, copy_socket_to_stdout);
+    drop(focus_sender);
+    let cleanup_result = focus_task.await.context("focus task panicked")?;
+    transfer_result?;
+    cleanup_result.context("restore application focus after bridge shutdown")?;
     Ok(())
+}
+
+enum FocusEvent {
+    Before(Value),
+    After(Value),
+}
+
+struct FocusMessage {
+    event: FocusEvent,
+    result_sender: oneshot::Sender<anyhow::Result<()>>,
+}
+
+async fn send_focus_event(
+    sender: &mpsc::Sender<FocusMessage>,
+    event: FocusEvent,
+) -> anyhow::Result<()> {
+    let (result_sender, result_receiver) = oneshot::channel();
+    sender
+        .send(FocusMessage {
+            event,
+            result_sender,
+        })
+        .await
+        .context("focus task stopped before processing the game message")?;
+    result_receiver
+        .await
+        .context("focus task stopped without reporting a result")?
+}
+
+async fn run_focus_actor<F>(
+    mut tracker: FocusTracker<F>,
+    mut receiver: mpsc::Receiver<FocusMessage>,
+) -> anyhow::Result<()>
+where
+    F: ApplicationFocus,
+{
+    while let Some(FocusMessage {
+        event,
+        result_sender,
+    }) = receiver.recv().await
+    {
+        let result = match event {
+            FocusEvent::Before(request) => tracker.before_request(&request).await,
+            FocusEvent::After(response) => tracker.after_response(&response).await,
+        };
+        let _ = result_sender.send(result);
+    }
+    tracker.restore_all().await
 }
 
 fn adopt_spooled_image(response: &mut Value, spool_root: &Path) -> anyhow::Result<()> {

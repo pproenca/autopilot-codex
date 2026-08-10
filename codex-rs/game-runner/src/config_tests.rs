@@ -87,6 +87,7 @@ async fn runner_config_is_fixed_to_read_only_sol() -> anyhow::Result<()> {
             game_args: vec![
                 "__stdio-to-uds".to_string(),
                 temp.path().join("game.sock").display().to_string(),
+                "Gambonanza".to_string(),
             ],
         }
     );

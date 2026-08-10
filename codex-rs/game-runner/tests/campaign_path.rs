@@ -344,7 +344,7 @@ async fn missing_after_evidence_never_completes_canary() -> anyhow::Result<()> {
     let report = CampaignRun::new(CampaignLimits {
         max_turns: 2,
         total_timeout: Duration::from_secs(30),
-        post_mutation_timeout: Duration::from_millis(1),
+        post_mutation_timeout: Duration::from_secs(5),
     })
     .execute(
         &runtime.thread,

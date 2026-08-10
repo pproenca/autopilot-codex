@@ -157,7 +157,11 @@ async fn load_runner_config_inner(
 
     let game_server = serde_json::from_value::<McpServerConfig>(serde_json::json!({
         "command": runner_executable,
-        "args": ["__stdio-to-uds", deployment.socket_path],
+        "args": [
+            "__stdio-to-uds",
+            deployment.socket_path,
+            deployment.target_app,
+        ],
         "enabled": true,
         "required": true,
         "supports_parallel_tool_calls": false,

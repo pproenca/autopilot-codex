@@ -56,10 +56,19 @@ where
 async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args.first().and_then(|arg| arg.to_str()) == Some(BRIDGE_MODE) {
-        let [_, socket] = raw_args.as_slice() else {
-            bail!("{BRIDGE_MODE} requires exactly one socket path");
+        return match raw_args.as_slice() {
+            [_, socket, target_app] => {
+                codex_game_runner::run_image_bridge(
+                    Path::new(socket),
+                    target_app.to_string_lossy().as_ref(),
+                )
+                .await
+            }
+            [_, socket] => {
+                codex_game_runner::run_image_bridge_without_focus(Path::new(socket)).await
+            }
+            _ => bail!("{BRIDGE_MODE} requires one socket path and an optional target app"),
         };
-        return codex_game_runner::run_image_bridge(Path::new(socket)).await;
     }
 
     if let Err(err) = set_default_originator("codex_game_runner".to_string()) {
