@@ -29,19 +29,19 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use sha2::Digest;
-use sha2::Sha256;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::UnixListener;
-use tokio::net::unix::OwnedReadHalf;
-use tokio::net::unix::OwnedWriteHalf;
+
+mod support;
+
+use support::method;
+use support::next_message;
+use support::respond;
+use support::write_spooled_jpeg;
 
 const CALL_ID: &str = "game-observation-1";
-const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[derive(Debug, PartialEq, Eq)]
 struct HelperTrace {
     methods: Vec<String>,
@@ -306,8 +306,7 @@ async fn serve_fake_game_mcp(
     methods.push("tools/call:get_app_state".to_string());
     let blob_id = "00000000-0000-4000-8000-000000000001";
     let jpeg = BASE64_STANDARD.decode("/9j/2Q==")?;
-    std::fs::create_dir_all(&spool_root)?;
-    std::fs::write(spool_root.join(format!("{blob_id}.jpg")), &jpeg)?;
+    let sha256 = write_spooled_jpeg(&spool_root, blob_id, &jpeg)?;
     respond(
         &mut writer,
         &tools_call,
@@ -318,7 +317,7 @@ async fn serve_fake_game_mcp(
                 "image_blob_id": blob_id,
                 "image_bytes": jpeg.len(),
                 "mime_type": "image/jpeg",
-                "sha256": format!("{:x}", Sha256::digest(&jpeg)),
+                "sha256": sha256,
                 "width": 2,
                 "height": 2,
             },
@@ -327,37 +326,6 @@ async fn serve_fake_game_mcp(
     )
     .await?;
     Ok(HelperTrace { methods, call_id })
-}
-
-fn method(message: &Value) -> anyhow::Result<&str> {
-    message["method"]
-        .as_str()
-        .context("MCP message has no method")
-}
-
-async fn next_message(
-    lines: &mut tokio::io::Lines<BufReader<OwnedReadHalf>>,
-) -> anyhow::Result<Value> {
-    let line = tokio::time::timeout(SOCKET_TIMEOUT, lines.next_line())
-        .await??
-        .context("MCP client closed the socket")?;
-    Ok(serde_json::from_str(&line)?)
-}
-
-async fn respond(
-    writer: &mut OwnedWriteHalf,
-    request: &Value,
-    result: Value,
-) -> anyhow::Result<()> {
-    let mut encoded = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": request["id"],
-        "result": result,
-    }))?;
-    encoded.push(b'\n');
-    writer.write_all(&encoded).await?;
-    writer.flush().await?;
-    Ok(())
 }
 
 fn expected_model() -> ModelObservation {
