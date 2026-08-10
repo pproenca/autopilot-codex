@@ -158,7 +158,7 @@ async fn policy_denial_bounds_model_visible_reason() {
     .await
     .expect_err("a denied call should return an error");
     let response = McpToolOutput {
-        result: CallToolResult::from_error_text(format!("tool call error: {error}")),
+        result: CallToolResult::from_error_text(format!("tool call error: {error:#}")),
         tool_input: serde_json::json!({}),
         wall_time: Duration::from_millis(1),
         original_image_detail_supported: false,
