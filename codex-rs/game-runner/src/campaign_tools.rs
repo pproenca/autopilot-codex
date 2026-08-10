@@ -42,7 +42,8 @@ impl CampaignTools {
     pub fn specs() -> Vec<DynamicToolSpec> {
         vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
             name: CAMPAIGN_TOOL_NAMESPACE.to_string(),
-            description: "Record bounded game decisions and visible terminal outcomes.".to_string(),
+            description: "Record bounded game decisions and visible evidence-linked outcomes."
+                .to_string(),
             tools: vec![
                 DynamicToolNamespaceTool::Function(record_plan_spec()),
                 DynamicToolNamespaceTool::Function(report_outcome_spec()),
@@ -187,8 +188,9 @@ fn record_plan_spec() -> DynamicToolFunctionSpec {
 fn report_outcome_spec() -> DynamicToolFunctionSpec {
     DynamicToolFunctionSpec {
         name: "report_outcome".to_string(),
-        description: "Report a visible win, loss, or terminal block after fresh evidence."
-            .to_string(),
+        description:
+            "Classify fresh evidence as the expected canary result, a win, a loss, or a terminal block."
+                .to_string(),
         input_schema: json!({
             "type": "object",
             "additionalProperties": false,
@@ -198,7 +200,7 @@ fn report_outcome_spec() -> DynamicToolFunctionSpec {
             "properties": {
                 "outcome": {
                     "type": "string",
-                    "enum": ["loss", "win", "terminal_block"]
+                    "enum": ["canary_complete", "loss", "win", "terminal_block"]
                 },
                 "observation_reference": string_schema(),
                 "visible_evidence_summary": string_schema(),

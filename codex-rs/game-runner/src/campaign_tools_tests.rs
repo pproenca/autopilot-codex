@@ -164,14 +164,14 @@ fn oversized_plan_is_rejected_without_changing_authority() -> anyhow::Result<()>
 }
 
 #[test]
-fn outcome_requires_after_evidence_and_accepts_a_visible_win() -> anyhow::Result<()> {
+fn outcome_requires_after_evidence_and_accepts_a_visible_canary_result() -> anyhow::Result<()> {
     let gate = Arc::new(observed_gate());
     let tools = CampaignTools::new(Arc::clone(&gate));
     let arguments = json!({
-        "outcome": "win",
+        "outcome": "canary_complete",
         "observation_reference": "sha256:before",
-        "visible_evidence_summary": "The victory screen is visible",
-        "lesson": "The selected action won"
+        "visible_evidence_summary": "The expected settings screen is visible",
+        "lesson": "The selected action opened settings"
     });
     assert!(
         !tools
@@ -226,4 +226,9 @@ fn specs_expose_only_two_strict_direct_tools() {
         assert!(!function.defer_loading);
         assert_eq!(function.input_schema["additionalProperties"], false);
     }
+    let DynamicToolNamespaceTool::Function(report_outcome) = &namespace.tools[1];
+    assert_eq!(
+        report_outcome.input_schema["properties"]["outcome"]["enum"],
+        json!(["canary_complete", "loss", "win", "terminal_block"])
+    );
 }

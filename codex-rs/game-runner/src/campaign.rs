@@ -72,6 +72,7 @@ impl CampaignProgress {
     fn on_turn_complete(&mut self, snapshot: &DecisionSnapshot) -> CampaignDirective {
         if let Some(outcome) = &snapshot.outcome {
             return CampaignDirective::Complete(match outcome.draft.outcome {
+                OutcomeKind::CanaryComplete => CampaignTerminalState::CanaryComplete,
                 OutcomeKind::Win => CampaignTerminalState::Won,
                 OutcomeKind::Loss => CampaignTerminalState::LossObserved,
                 OutcomeKind::TerminalBlock => CampaignTerminalState::TerminalBlock,
@@ -81,7 +82,9 @@ impl CampaignProgress {
             && !snapshot.requires_post_mutation_observation
             && observation.generation > mutation.plan.observation.generation
         {
-            return CampaignDirective::Complete(CampaignTerminalState::CanaryComplete);
+            return CampaignDirective::Block(
+                "fresh post-mutation evidence was not classified by the model".to_string(),
+            );
         }
         self.observe_snapshot(snapshot);
         if self.turn_ids.len() >= self.limits.max_turns {

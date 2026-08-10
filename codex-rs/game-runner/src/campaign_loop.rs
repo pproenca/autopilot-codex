@@ -22,7 +22,7 @@ use crate::MutationResult;
 use crate::RunnerError;
 use crate::campaign_report::CampaignReportContext;
 
-const CONTINUATION_PROMPT: &str = "Continue the same game campaign. Re-observe whenever authority was invalidated. Before any mutation, call game_runner.record_plan with two to four candidates and an exact chosen action. After the one allowed mutation, capture a fresh full-frame observation and stop.";
+const CONTINUATION_PROMPT: &str = "Continue the same game campaign. Re-observe whenever authority was invalidated. Before any mutation, call game_runner.record_plan with two to four candidates and an exact chosen action. After the one allowed mutation, capture a fresh full-frame observation. Call game_runner.report_outcome with canary_complete only if that frame visibly matches the plan's expected result; otherwise stop without reporting success.";
 
 impl CampaignRun {
     pub async fn execute(
@@ -169,7 +169,7 @@ impl CampaignRun {
 
 fn initial_prompt(target_app: &str) -> String {
     format!(
-        "Control the currently visible {target_app} game for one safe Stage 4A canary action. First call mcp__game__get_app_state and inspect the full frame. Before any click, drag, or focus-click, call game_runner.record_plan with two to four candidates and the exact complete chosen tool arguments. Choose only reversible non-gameplay navigation such as Settings, Collection, or Credits; never choose Play or Continue. Execute exactly the accepted action once, then call mcp__game__get_app_state again. Do not attempt a second mutation. Call game_runner.report_outcome only if the fresh screen visibly proves a win, loss, or terminal block."
+        "Control the currently visible {target_app} game for one safe Stage 4A canary action. First call mcp__game__get_app_state and inspect the full frame. Before any click, drag, or focus-click, call game_runner.record_plan with two to four candidates and the exact complete chosen tool arguments. Choose only reversible non-gameplay navigation such as Settings, Collection, or Credits; never choose Play or Continue. Execute exactly the accepted action once, then call mcp__game__get_app_state again. Do not attempt a second mutation. Call game_runner.report_outcome with canary_complete only if the fresh screen visibly matches the plan's expected result. Use win, loss, or terminal_block only when the fresh screen visibly proves that terminal state. If the expected result is absent, stop without reporting success."
     )
 }
 

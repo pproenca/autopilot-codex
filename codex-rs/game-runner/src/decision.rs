@@ -108,6 +108,7 @@ pub struct MutationEvidence {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeKind {
+    CanaryComplete,
     Loss,
     Win,
     TerminalBlock,

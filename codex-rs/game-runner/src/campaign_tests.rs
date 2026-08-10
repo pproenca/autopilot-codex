@@ -164,7 +164,7 @@ fn sixth_turn_is_the_last_allowed_turn() {
 }
 
 #[test]
-fn mutation_starts_deadline_and_after_evidence_completes_canary() {
+fn fresh_after_evidence_without_model_confirmation_blocks_canary() {
     let mut progress = CampaignProgress::new(limits());
     progress.on_turn_started("turn-1".to_string());
     assert_eq!(
@@ -178,13 +178,19 @@ fn mutation_starts_deadline_and_after_evidence_completes_canary() {
     ));
     assert_eq!(
         progress.on_turn_complete(&mutation_snapshot(true, None)),
-        CampaignDirective::Complete(CampaignTerminalState::CanaryComplete)
+        CampaignDirective::Block(
+            "fresh post-mutation evidence was not classified by the model".to_string()
+        )
     );
 }
 
 #[test]
 fn reported_outcomes_map_to_terminal_states() {
     for (outcome, state) in [
+        (
+            OutcomeKind::CanaryComplete,
+            CampaignTerminalState::CanaryComplete,
+        ),
         (OutcomeKind::Win, CampaignTerminalState::Won),
         (OutcomeKind::Loss, CampaignTerminalState::LossObserved),
         (
