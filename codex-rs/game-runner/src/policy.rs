@@ -93,11 +93,10 @@ impl McpToolCallPolicyContributor for GameCallPolicy {
                 }
                 "click" | "drag" | "focus_click" => {
                     let arguments = input.arguments.unwrap_or(&Value::Null);
-                    match self.gate.prepare_mutation(
-                        input.tool_name,
-                        arguments,
-                        input.call_id,
-                    ) {
+                    match self
+                        .gate
+                        .prepare_mutation(input.tool_name, arguments, input.call_id)
+                    {
                         Ok(authorization) => {
                             let McpToolCallPolicyDecision::Allow {
                                 mut additional_request_meta,

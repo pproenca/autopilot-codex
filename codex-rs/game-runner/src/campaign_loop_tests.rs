@@ -82,11 +82,7 @@ fn authorized_gate() -> anyhow::Result<DecisionGate> {
         expected_visible_result: "A safe screen".to_string(),
         invalidation_condition: "The menu changes".to_string(),
     })?;
-    gate.prepare_mutation(
-        "click",
-        &json!({"x": 180, "y": 640}),
-        "mutation-1",
-    )?;
+    gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
     Ok(gate)
 }
 

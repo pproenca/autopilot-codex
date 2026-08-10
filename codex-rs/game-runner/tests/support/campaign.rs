@@ -35,8 +35,7 @@ use crate::support::next_message;
 use crate::support::respond;
 use crate::support::write_spooled_jpeg;
 
-pub const ACTION_SHA256: &str =
-    "f709b60a7bbf91028aa10498db469d2a47fd96669d5167f6163200718809b3e1";
+pub const ACTION_SHA256: &str = "f709b60a7bbf91028aa10498db469d2a47fd96669d5167f6163200718809b3e1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FakeGameScenario {
@@ -71,11 +70,7 @@ pub async fn start_runtime(
     let socket_path = temp.path().join("game.sock");
     let listener = UnixListener::bind(&socket_path)?;
     let spool_root = temp.path().join("screenshot-spool");
-    let helper_task = tokio::spawn(serve_fake_game_mcp(
-        listener,
-        spool_root.clone(),
-        scenario,
-    ));
+    let helper_task = tokio::spawn(serve_fake_game_mcp(listener, spool_root.clone(), scenario));
     let game_runner_bin = codex_utils_cargo_bin::cargo_bin("codex-game-runner")?;
     let code_mode_host_bin = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
     let game_server = serde_json::from_value::<McpServerConfig>(json!({
@@ -121,11 +116,13 @@ pub async fn start_runtime(
 }
 
 pub fn configure_runner_surface(config: &mut Config) {
-    config.permissions = Permissions::from_approval_and_profile(
+    let Ok(permissions) = Permissions::from_approval_and_profile(
         Constrained::allow_any(AskForApproval::Never),
         Constrained::allow_any(PermissionProfile::read_only()),
-    )
-    .expect("set runner permissions");
+    ) else {
+        unreachable!("unconstrained runner test permissions must be valid");
+    };
+    config.permissions = permissions;
     let mut features = Features::default();
     features.enable(Feature::CodeMode);
     features.enable(Feature::CodeModeHost);

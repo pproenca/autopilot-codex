@@ -42,8 +42,7 @@ impl CampaignTools {
     pub fn specs() -> Vec<DynamicToolSpec> {
         vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
             name: CAMPAIGN_TOOL_NAMESPACE.to_string(),
-            description: "Record bounded game decisions and visible terminal outcomes."
-                .to_string(),
+            description: "Record bounded game decisions and visible terminal outcomes.".to_string(),
             tools: vec![
                 DynamicToolNamespaceTool::Function(record_plan_spec()),
                 DynamicToolNamespaceTool::Function(report_outcome_spec()),
@@ -66,9 +65,11 @@ impl CampaignTools {
     }
 
     fn record_plan(&self, request: &DynamicToolCallRequest) -> DynamicToolResponse {
-        let result = bounded_decode::<PlanDraft>(&request.arguments, 12 * 1024)
-            .map_err(|message| message.to_string())
-            .and_then(|draft| self.gate.record_plan(draft).map_err(|error| error.to_string()));
+        let result = bounded_decode::<PlanDraft>(&request.arguments, 12 * 1024).and_then(|draft| {
+            self.gate
+                .record_plan(draft)
+                .map_err(|error| error.to_string())
+        });
         match result {
             Ok(plan) => response(
                 true,
@@ -83,9 +84,8 @@ impl CampaignTools {
     }
 
     fn report_outcome(&self, request: &DynamicToolCallRequest) -> DynamicToolResponse {
-        let result = bounded_decode::<OutcomeDraft>(&request.arguments, 8 * 1024)
-            .map_err(|message| message.to_string())
-            .and_then(|draft| {
+        let result =
+            bounded_decode::<OutcomeDraft>(&request.arguments, 8 * 1024).and_then(|draft| {
                 self.gate
                     .report_outcome(draft)
                     .map_err(|error| error.to_string())
@@ -121,8 +121,7 @@ fn rejected(message: String) -> DynamicToolResponse {
 fn response(success: bool, value: Value) -> DynamicToolResponse {
     DynamicToolResponse {
         content_items: vec![DynamicToolCallOutputContentItem::InputText {
-            text: serde_json::to_string(&value)
-                .expect("serializing a JSON value into dynamic tool output cannot fail"),
+            text: value.to_string(),
         }],
         success,
     }

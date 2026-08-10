@@ -44,11 +44,7 @@ pub async fn respond(
     Ok(())
 }
 
-pub fn write_spooled_jpeg(
-    spool_root: &Path,
-    blob_id: &str,
-    jpeg: &[u8],
-) -> anyhow::Result<String> {
+pub fn write_spooled_jpeg(spool_root: &Path, blob_id: &str, jpeg: &[u8]) -> anyhow::Result<String> {
     std::fs::create_dir_all(spool_root)?;
     std::fs::write(spool_root.join(format!("{blob_id}.jpg")), jpeg)?;
     Ok(format!("{:x}", Sha256::digest(jpeg)))

@@ -23,11 +23,7 @@ use crate::GameCallPolicy;
 use crate::RunnerError;
 
 fn policy() -> GameCallPolicy {
-    GameCallPolicy::new(
-        "test-epoch".to_string(),
-        1,
-        Arc::new(DecisionGate::new(1)),
-    )
+    GameCallPolicy::new("test-epoch".to_string(), 1, Arc::new(DecisionGate::new(1)))
 }
 
 #[test]

@@ -75,7 +75,10 @@ fn record_plan_returns_runner_owned_identity_and_hash() -> anyhow::Result<()> {
     let tools = CampaignTools::new(Arc::clone(&gate));
 
     assert_eq!(
-        tools.handle(&request("record_plan", serde_json::to_value(plan_draft("sha256:before"))?))?,
+        tools.handle(&request(
+            "record_plan",
+            serde_json::to_value(plan_draft("sha256:before"))?
+        ))?,
         DynamicToolResponse {
             content_items: vec![DynamicToolCallOutputContentItem::InputText {
                 text: concat!(
@@ -170,7 +173,11 @@ fn outcome_requires_after_evidence_and_accepts_a_visible_win() -> anyhow::Result
         "visible_evidence_summary": "The victory screen is visible",
         "lesson": "The selected action won"
     });
-    assert!(!tools.handle(&request("report_outcome", arguments.clone()))?.success);
+    assert!(
+        !tools
+            .handle(&request("report_outcome", arguments.clone()))?
+            .success
+    );
 
     gate.record_plan(plan_draft("sha256:before"))?;
     gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
@@ -193,12 +200,15 @@ fn outcome_requires_after_evidence_and_accepts_a_visible_win() -> anyhow::Result
 #[test]
 fn oversized_outcome_is_a_recoverable_rejection() -> anyhow::Result<()> {
     let tools = CampaignTools::new(Arc::new(observed_gate()));
-    let response = tools.handle(&request("report_outcome", json!({
-        "outcome": "terminal_block",
-        "observation_reference": "sha256:before",
-        "visible_evidence_summary": "x".repeat(2049),
-        "lesson": "bounded"
-    })))?;
+    let response = tools.handle(&request(
+        "report_outcome",
+        json!({
+            "outcome": "terminal_block",
+            "observation_reference": "sha256:before",
+            "visible_evidence_summary": "x".repeat(2049),
+            "lesson": "bounded"
+        }),
+    ))?;
     assert!(!response.success);
     Ok(())
 }

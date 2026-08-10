@@ -56,9 +56,7 @@ fn runner_entry_uses_the_codex_main_runtime() -> anyhow::Result<()> {
 
 #[test]
 fn production_run_returns_a_campaign_report() {
-    fn assert_campaign_report(
-        future: impl Future<Output = anyhow::Result<CampaignReport>>,
-    ) {
+    fn assert_campaign_report(future: impl Future<Output = anyhow::Result<CampaignReport>>) {
         drop(future);
     }
 

@@ -2,14 +2,10 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::DecisionAudit;
+use super::DecisionError;
 use super::DecisionGate;
 use super::DecisionSnapshot;
-use crate::ClickArguments;
-use super::DecisionError;
-use crate::DragArguments;
-use crate::FocusClickArguments;
 use super::InvalidationReason;
-use crate::MouseButton;
 use super::MutationEvidence;
 use super::MutationResult;
 use super::OutcomeDraft;
@@ -17,6 +13,10 @@ use super::OutcomeKind;
 use super::PlanCandidate;
 use super::PlanDraft;
 use super::PlannedAction;
+use crate::ClickArguments;
+use crate::DragArguments;
+use crate::FocusClickArguments;
+use crate::MouseButton;
 
 #[test]
 fn click_action_has_exact_arguments_and_stable_hash() -> anyhow::Result<()> {
@@ -36,8 +36,7 @@ fn click_action_has_exact_arguments_and_stable_hash() -> anyhow::Result<()> {
         (
             "click",
             json!({"count": 1, "x": 120, "y": 240}),
-            "bd1c262b95a3f95eaf81bc17481f5dcc19a66895cd96af45145e6fcd6363f01e"
-                .to_string(),
+            "bd1c262b95a3f95eaf81bc17481f5dcc19a66895cd96af45145e6fcd6363f01e".to_string(),
         )
     );
     Ok(())
@@ -104,7 +103,10 @@ fn planned_actions_reject_invalid_counts_and_coordinates() {
             button: None,
             count: Some(count),
         });
-        assert_eq!(action.validate(/*width*/ 10, /*height*/ 10), Err(DecisionError::InvalidClickCount));
+        assert_eq!(
+            action.validate(/*width*/ 10, /*height*/ 10),
+            Err(DecisionError::InvalidClickCount)
+        );
     }
 
     let action = PlannedAction::FocusClick(FocusClickArguments { x: -1, y: 2 });
@@ -170,12 +172,8 @@ fn one_observation_plan_mutation_and_after_observation_is_complete() -> anyhow::
         /*width*/ 1051,
         /*height*/ 820,
     )?;
-    let plan = gate.record_plan(plan_draft(before.reference.clone(), click(180, 640)))?;
-    let authorized = gate.prepare_mutation(
-        "click",
-        &json!({"x": 180, "y": 640}),
-        "mutation-1",
-    )?;
+    let plan = gate.record_plan(plan_draft(before.reference, click(180, 640)))?;
+    let authorized = gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
     gate.record_mutation_result("mutation-1", MutationResult::Success)?;
     gate.begin_full_observation();
     let after = gate.complete_full_observation(
@@ -213,14 +211,18 @@ fn one_observation_plan_mutation_and_after_observation_is_complete() -> anyhow::
 
 #[test]
 fn capture_attempt_and_positive_wait_invalidate_authority() -> anyhow::Result<()> {
-    for invalidate in [InvalidationReason::CaptureStarted, InvalidationReason::PositiveWait] {
+    for invalidate in [
+        InvalidationReason::CaptureStarted,
+        InvalidationReason::PositiveWait,
+    ] {
         let gate = DecisionGate::new(1);
         observe(&gate, "capture-before", "sha256:before")?;
         gate.record_plan(plan_draft("sha256:before".to_string(), click(180, 640)))?;
         match invalidate {
             InvalidationReason::CaptureStarted => gate.begin_full_observation(),
             InvalidationReason::PositiveWait => gate.before_wait(Some(&json!({"seconds": 1}))),
-            InvalidationReason::TurnAborted | InvalidationReason::OwnerGenerationReplaced { .. } => {
+            InvalidationReason::TurnAborted
+            | InvalidationReason::OwnerGenerationReplaced { .. } => {
                 unreachable!()
             }
         }
@@ -252,7 +254,11 @@ fn stale_plan_and_mismatched_mutation_are_rejected_and_consumed() -> anyhow::Res
     ));
     let snapshot = gate.snapshot();
     assert_eq!(
-        (snapshot.observation, snapshot.plan, snapshot.requires_post_mutation_observation),
+        (
+            snapshot.observation,
+            snapshot.plan,
+            snapshot.requires_post_mutation_observation
+        ),
         (None, None, true)
     );
     assert_eq!(snapshot.audit.mutation_denials, 1);
@@ -283,7 +289,10 @@ fn interruption_and_owner_replacement_invalidate_plans() -> anyhow::Result<()> {
     observe(&gate, "capture-before", "sha256:before")?;
     gate.record_plan(plan_draft("sha256:before".to_string(), click(180, 640)))?;
     gate.invalidate(InvalidationReason::TurnAborted);
-    assert_eq!((gate.snapshot().observation, gate.snapshot().plan), (None, None));
+    assert_eq!(
+        (gate.snapshot().observation, gate.snapshot().plan),
+        (None, None)
+    );
 
     observe(&gate, "capture-again", "sha256:again")?;
     gate.record_plan(plan_draft("sha256:again".to_string(), click(180, 640)))?;
@@ -291,7 +300,14 @@ fn interruption_and_owner_replacement_invalidate_plans() -> anyhow::Result<()> {
         owner_generation: 2,
     });
     let snapshot = gate.snapshot();
-    assert_eq!((snapshot.owner_generation, snapshot.observation, snapshot.plan), (2, None, None));
+    assert_eq!(
+        (
+            snapshot.owner_generation,
+            snapshot.observation,
+            snapshot.plan
+        ),
+        (2, None, None)
+    );
     Ok(())
 }
 

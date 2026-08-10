@@ -112,9 +112,7 @@ impl CampaignRun {
                             submit_prompt(thread, CONTINUATION_PROMPT).await?;
                         }
                         CampaignDirective::Complete(state) => {
-                            return build_report(
-                                session, &progress, policy, &gate, state, None,
-                            );
+                            return build_report(session, &progress, policy, &gate, state, None);
                         }
                         CampaignDirective::Block(reason) => {
                             return build_report(

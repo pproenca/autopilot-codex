@@ -152,18 +152,18 @@ async fn capture_and_positive_wait_invalidate_before_dispatch() -> anyhow::Resul
         McpToolCallPolicyDecision::Allow { .. }
     ));
     assert!(gate.snapshot().plan.is_some());
-    evaluate(
-        &policy,
-        "wait",
-        "wait-1",
-        Some(&json!({"seconds": 1})),
-    )
-    .await;
-    assert_eq!((gate.snapshot().observation, gate.snapshot().plan), (None, None));
+    evaluate(&policy, "wait", "wait-1", Some(&json!({"seconds": 1}))).await;
+    assert_eq!(
+        (gate.snapshot().observation, gate.snapshot().plan),
+        (None, None)
+    );
 
     install_click_plan(&gate, "sha256:again", 180)?;
     evaluate(&policy, "get_app_state", "capture-2", Some(&json!({}))).await;
-    assert_eq!((gate.snapshot().observation, gate.snapshot().plan), (None, None));
+    assert_eq!(
+        (gate.snapshot().observation, gate.snapshot().plan),
+        (None, None)
+    );
     Ok(())
 }
 

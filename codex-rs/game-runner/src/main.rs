@@ -15,8 +15,8 @@ use codex_game_runner::CampaignLimits;
 use codex_game_runner::CampaignReport;
 use codex_game_runner::CampaignRun;
 use codex_game_runner::CampaignTools;
-use codex_game_runner::GENERATION;
 use codex_game_runner::DecisionGate;
+use codex_game_runner::GENERATION;
 use codex_game_runner::GameCallPolicy;
 use codex_game_runner::HelperLauncher;
 use codex_game_runner::ReadinessLimits;
@@ -122,7 +122,10 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignR
 
     match (campaign, cleanup_errors.is_empty()) {
         (Ok(report), true) => Ok(report),
-        (Ok(_), false) => bail!("game campaign cleanup failed: {}", cleanup_errors.join("; ")),
+        (Ok(_), false) => bail!(
+            "game campaign cleanup failed: {}",
+            cleanup_errors.join("; ")
+        ),
         (Err(primary), true) => Err(primary.into()),
         (Err(primary), false) => Err(RunnerError::RunAndCleanupFailed {
             primary: Box::new(primary),

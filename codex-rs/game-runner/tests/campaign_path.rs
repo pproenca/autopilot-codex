@@ -19,9 +19,9 @@ use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 
-mod support;
 #[path = "support/campaign.rs"]
 mod campaign_support;
+mod support;
 
 use campaign_support::ACTION_SHA256;
 use campaign_support::FakeGameScenario;
@@ -124,7 +124,10 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
         Some((trace.after_call_id.as_ref(), trace.after_reference.as_ref()))
     );
     let plan = report.accepted_plan.as_ref().context("accepted plan")?;
-    assert_eq!((plan.id.as_str(), plan.action_sha256.as_str()), ("plan-1-1", ACTION_SHA256));
+    assert_eq!(
+        (plan.id.as_str(), plan.action_sha256.as_str()),
+        ("plan-1-1", ACTION_SHA256)
+    );
     assert_eq!(plan.draft.observation_reference, trace.before_reference);
     assert_eq!(plan.draft.candidates.len(), 2);
     let mutation = report.mutation.as_ref().context("authorized mutation")?;
@@ -138,8 +141,14 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
             report.mutation_result,
         ),
         (
-            trace.mutation_call_id.as_deref().context("helper mutation")?,
-            trace.mutation_call_id.as_deref().context("helper mutation")?,
+            trace
+                .mutation_call_id
+                .as_deref()
+                .context("helper mutation")?,
+            trace
+                .mutation_call_id
+                .as_deref()
+                .context("helper mutation")?,
             ACTION_SHA256,
             "click",
             &json!({"x": 180, "y": 640}),
@@ -252,7 +261,10 @@ async fn mismatched_planned_action_never_reaches_helper() -> anyhow::Result<()> 
 
     assert_eq!(cleanup_errors, Vec::<String>::new());
     assert_eq!(report.terminal_state, CampaignTerminalState::TerminalBlock);
-    assert_eq!((report.accepted_plan, report.mutation, report.after), (None, None, None));
+    assert_eq!(
+        (report.accepted_plan, report.mutation, report.after),
+        (None, None, None)
+    );
     assert_eq!(
         (
             report.decision_audit.plans_accepted,
@@ -281,7 +293,11 @@ async fn mismatched_planned_action_never_reaches_helper() -> anyhow::Result<()> 
             .custom_tool_call_output(EXEC_CALL_ID)
             .is_object()
     );
-    assert!(exec_response.single_request().body_contains_text("Gambonanza"));
+    assert!(
+        exec_response
+            .single_request()
+            .body_contains_text("Gambonanza")
+    );
     server.verify().await;
     Ok(())
 }
@@ -344,7 +360,10 @@ async fn missing_after_evidence_never_completes_canary() -> anyhow::Result<()> {
     assert_eq!(cleanup_errors, Vec::<String>::new());
     assert_eq!(report.terminal_state, CampaignTerminalState::TerminalBlock);
     assert_eq!(report.after, None);
-    assert_eq!(report.before.as_ref().map(|item| &item.reference), Some(&trace.before_reference));
+    assert_eq!(
+        report.before.as_ref().map(|item| &item.reference),
+        Some(&trace.before_reference)
+    );
     assert_eq!(
         report
             .accepted_plan

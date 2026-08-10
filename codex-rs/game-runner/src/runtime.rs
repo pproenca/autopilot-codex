@@ -66,13 +66,7 @@ impl RunnerRuntime {
         dynamic_tools: Vec<DynamicToolSpec>,
         code_mode_host_program: PathBuf,
     ) -> Result<Self, RunnerError> {
-        Self::start_inner(
-            config,
-            policy,
-            dynamic_tools,
-            Some(code_mode_host_program),
-        )
-        .await
+        Self::start_inner(config, policy, dynamic_tools, Some(code_mode_host_program)).await
     }
 
     async fn start_inner(

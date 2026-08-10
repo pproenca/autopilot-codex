@@ -247,7 +247,9 @@ impl DecisionGate {
                     actual: draft.observation_reference,
                 });
             }
-            draft.chosen_action.validate(observation.width, observation.height)?;
+            draft
+                .chosen_action
+                .validate(observation.width, observation.height)?;
             state.plan_sequence += 1;
             Ok(AcceptedPlan {
                 id: format!("plan-{}-{}", observation.generation, state.plan_sequence),
@@ -394,12 +396,24 @@ fn has_positive_number(value: &Value) -> bool {
 
 fn validate_plan_strings(draft: &PlanDraft) -> Result<(), DecisionError> {
     for (field, value) in [
-        ("observation_reference", draft.observation_reference.as_str()),
+        (
+            "observation_reference",
+            draft.observation_reference.as_str(),
+        ),
         ("objective", draft.objective.as_str()),
-        ("visible_state_summary", draft.visible_state_summary.as_str()),
+        (
+            "visible_state_summary",
+            draft.visible_state_summary.as_str(),
+        ),
         ("reason", draft.reason.as_str()),
-        ("expected_visible_result", draft.expected_visible_result.as_str()),
-        ("invalidation_condition", draft.invalidation_condition.as_str()),
+        (
+            "expected_visible_result",
+            draft.expected_visible_result.as_str(),
+        ),
+        (
+            "invalidation_condition",
+            draft.invalidation_condition.as_str(),
+        ),
     ] {
         validate_string(field, value)?;
     }
@@ -415,8 +429,14 @@ fn validate_plan_strings(draft: &PlanDraft) -> Result<(), DecisionError> {
 
 fn validate_outcome_strings(draft: &OutcomeDraft) -> Result<(), DecisionError> {
     for (field, value) in [
-        ("observation_reference", draft.observation_reference.as_str()),
-        ("visible_evidence_summary", draft.visible_evidence_summary.as_str()),
+        (
+            "observation_reference",
+            draft.observation_reference.as_str(),
+        ),
+        (
+            "visible_evidence_summary",
+            draft.visible_evidence_summary.as_str(),
+        ),
         ("lesson", draft.lesson.as_str()),
     ] {
         validate_string(field, value)?;

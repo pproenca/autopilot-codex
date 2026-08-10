@@ -103,7 +103,9 @@ fn mutation_snapshot(after: bool, outcome: Option<OutcomeKind>) -> DecisionSnaps
         height: 820,
     });
     let reported = outcome.map(|outcome| ReportedOutcome {
-        observation: after_observation.clone().expect("outcome needs after evidence"),
+        observation: after_observation
+            .clone()
+            .expect("outcome needs after evidence"),
         draft: OutcomeDraft {
             outcome,
             observation_reference: "sha256:after".to_string(),
@@ -220,8 +222,14 @@ fn report_projects_correlated_evidence_without_image_bytes() {
         mutation_snapshot(true, Some(OutcomeKind::Win)),
     );
     let encoded = serde_json::to_string(&report).expect("campaign report serializes");
-    assert_eq!(report.before.as_ref().map(|value| value.reference.as_str()), Some("sha256:before"));
-    assert_eq!(report.after.as_ref().map(|value| value.reference.as_str()), Some("sha256:after"));
+    assert_eq!(
+        report.before.as_ref().map(|value| value.reference.as_str()),
+        Some("sha256:before")
+    );
+    assert_eq!(
+        report.after.as_ref().map(|value| value.reference.as_str()),
+        Some("sha256:after")
+    );
     assert!(!encoded.contains("base64"));
     assert!(!encoded.contains("image_url"));
 }

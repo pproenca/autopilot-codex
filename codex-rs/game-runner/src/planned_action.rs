@@ -62,10 +62,10 @@ impl PlannedAction {
     pub fn arguments(&self) -> Value {
         match self {
             Self::Click(arguments) => {
-                let mut value = json!({"x": arguments.x, "y": arguments.y});
-                let object = value
-                    .as_object_mut()
-                    .expect("click arguments fixture must be an object");
+                let mut object = Map::from_iter([
+                    ("x".to_string(), Value::from(arguments.x)),
+                    ("y".to_string(), Value::from(arguments.y)),
+                ]);
                 if let Some(button) = arguments.button {
                     object.insert(
                         "button".to_string(),
@@ -81,7 +81,7 @@ impl PlannedAction {
                 if let Some(count) = arguments.count {
                     object.insert("count".to_string(), Value::from(count));
                 }
-                value
+                Value::Object(object)
             }
             Self::Drag(arguments) => json!({
                 "from_x": arguments.from_x,
@@ -129,11 +129,7 @@ impl PlannedAction {
     }
 }
 
-fn validate_coordinate(
-    coordinate: &str,
-    value: i64,
-    dimension: u32,
-) -> Result<(), DecisionError> {
+fn validate_coordinate(coordinate: &str, value: i64, dimension: u32) -> Result<(), DecisionError> {
     let upper_bound = i64::from(dimension) - 1;
     if value < 0 || value > upper_bound {
         return Err(DecisionError::CoordinateOutOfBounds {
