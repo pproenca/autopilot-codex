@@ -468,7 +468,7 @@ async fn handle_approved_mcp_tool_call(
                     ))
                 })
                 .await
-                .map_err(|error| format!("tool call error: {error:?}"))?;
+                .map_err(|error| format!("tool call error: {error}"))?;
             let result = sanitize_mcp_tool_result_for_model(
                 &turn_context.model_info.input_modalities,
                 Ok(result),
