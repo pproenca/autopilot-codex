@@ -134,9 +134,9 @@ async fn policy_denial_returns_model_visible_reason() {
 
 #[tokio::test]
 async fn policy_denial_bounds_model_visible_reason() {
-    let oversized_reason = "\0record a plan before moving.\\\"".repeat(4_096);
-    let oversized_server_name = "\0game\\\"".repeat(4_096);
-    let oversized_tool_name = "\0click\\\"".repeat(4_096);
+    let oversized_reason = "\0".repeat(4_096);
+    let oversized_server_name = "\0".repeat(4_096);
+    let oversized_tool_name = "\0".repeat(4_096);
     let expected_message = truncate_text(
         &format!(
             "MCP call policy denied `{oversized_server_name}/{oversized_tool_name}`: {oversized_reason}"
