@@ -72,21 +72,23 @@ without first rewriting its computer-use implementation. Preserve:
 - atomic drag and held-button cleanup;
 - operation IDs and durable at-most-once replay;
 - owner-only Unix socket access;
-- screenshot encoding and zoom support; and
+- screenshot encoding and latent crop support that is not model-exposed; and
 - stable signed macOS identity for Screen Recording and Accessibility grants.
 
 The helper continues to launch through LaunchServices as a signed app. The
 runner never launches its bare executable because doing so changes the TCC
 identity.
 
-### Existing stdio-to-UDS MCP bridge
+### Runner image-aware stdio-to-UDS MCP bridge
 
-Reuse the existing `codex-stdio-to-uds` byte bridge and cross-platform
-`codex-uds` stream. Codex launches the bridge through its existing stdio MCP
-transport, and the bridge connects to the helper's canonical MCP JSON-RPC
-socket. The bridge forwards bytes without interpreting MCP, so it eliminates
-AutoPilot's Elixir HTTP gateway without adding a second protocol or a new
-global MCP transport configuration.
+Reuse the existing stdio MCP transport and cross-platform `codex-uds` stream.
+The runner's private bridge connects to the helper's canonical MCP JSON-RPC
+socket and otherwise relays the protocol unchanged. For successful screenshot
+results only, it consumes the helper's one-shot local blob, verifies the UUID,
+file type, size, JPEG marker, and SHA-256, then returns standard MCP image
+content plus a `sha256:` artifact reference. This preserves the one essential
+AutoPilot gateway adapter without restoring its control plane or changing the
+generic `codex-stdio-to-uds` bridge.
 
 For GPT-5.6-Sol, Codex exposes the discovered game tools inside its existing
 code-mode `exec` tool. Model-authored JavaScript calls bindings such as
@@ -102,7 +104,6 @@ The game MCP surface initially remains limited to:
 - `drag`
 - `focus_click`
 - `wait`
-- `zoom`
 
 The runner exposes its two local tools through Codex's existing dynamic-tool
 mechanism rather than adding them to the Swift helper.
@@ -141,7 +142,8 @@ Pause blocks new game calls before interrupting the active turn. Stop closes
 the thread and starts the next campaign with a new epoch. The runner configures
 the game server's approval mode as `approve`; its fixed server and tool
 allow-lists plus the in-process policy are the unattended safety boundary.
-The stdio-to-UDS bridge remains a byte-transparent transport.
+The policy does not own screenshot adaptation; that remains isolated in the
+runner's private bridge.
 
 ## Codex Reuse Boundary
 
@@ -253,7 +255,7 @@ only when it cannot make an action depend on stale visual state.
 - concise visible-state summary;
 - two to four candidate moves;
 - predicted consequences over the useful visible planning horizon;
-- chosen move and reason;
+- one exact chosen tool and complete argument object plus the reason;
 - expected visible result; and
 - a condition that would invalidate the plan.
 
@@ -280,8 +282,8 @@ Plans have two conceptual levels:
 - The strategic objective is reconsidered at attempt start, shops, bosses, new
   mechanics, major resource changes, and whenever predictions fail.
 
-Both appear in the TUI. Routine observation and zoom calls do not require
-visible narration.
+Both appear in the TUI. Routine observation calls do not require visible
+narration.
 
 ## Outcomes and Learning
 
@@ -466,9 +468,14 @@ than one large patch:
    a fixed game-only configuration, and the owner-lease policy. Keep using the
    current signed external helper and require a successful GPT-5.6-Sol live
    observation before proceeding.
-4. Add a persistent thread, automatic continuation, the dynamic `record_plan`
-   and `report_outcome` tools, plan enforcement in the same MCP policy,
-   campaign state, bounded strategy, and fake-game vertical coverage.
+4. Split the campaign core into two gates:
+   - **4A:** add a persistent thread, automatic continuation, dynamic
+     `record_plan` and `report_outcome` tools, exact plan enforcement in the
+     same MCP policy, durable-operation metadata, one bounded physical action,
+     and fake-game victory coverage.
+   - **4B:** add durable campaign state, crash recovery, loss continuation,
+     bounded strategy, repeated planned actions, and fake multi-loss eventual
+     victory coverage.
 5. Add the focused TUI and its snapshots on top of the already tested headless
    campaign core.
 6. Import and package `GameControlHelper.app`, preserving the CUCtl tests and
@@ -478,10 +485,8 @@ than one large patch:
 8. Remove unreachable Codex products and workspace members in later mechanical
    changes after the winning runner's dependency closure is known.
 
-Stage 1 is the committed transport characterization. The next implementation
-plan covers Stage 2 only: the generic extension seam and hermetic owner-lease
-policy proof. Each later stage gets a focused follow-up plan after the
-preceding seam is demonstrated.
+Stages 1 through 3 are complete. Stage 4A is the next implementation plan;
+Stage 4B remains blocked until the signed-helper one-action canary succeeds.
 
 The game runner and helper are explicitly macOS-specific. The reused
 `codex-uds` and stdio bridge remain cross-platform and must continue to compile
