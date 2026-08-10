@@ -1,10 +1,16 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use codex_core_api::CallToolResult;
+use codex_core_api::CodexThread;
 use codex_core_api::EventMsg;
+use codex_core_api::Op;
+use codex_core_api::SessionConfiguredEvent;
 use codex_core_api::TurnCompleteEvent;
+use codex_core_api::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
 
 use crate::GAME_SERVER_NAME;
 use crate::GameCallPolicy;
@@ -36,6 +42,93 @@ pub struct ObservationReport {
     pub mutation_attempts: usize,
     pub mutation_dispatches: usize,
     pub model: ModelObservation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservationLimits {
+    pub turn_timeout: Duration,
+}
+
+pub struct ObservationRun {
+    limits: ObservationLimits,
+}
+
+impl ObservationRun {
+    pub fn new(limits: ObservationLimits) -> Self {
+        Self { limits }
+    }
+
+    pub async fn execute(
+        &self,
+        thread: &CodexThread,
+        session: &SessionConfiguredEvent,
+        policy: &GameCallPolicy,
+        target_app: &str,
+    ) -> Result<ObservationReport, RunnerError> {
+        thread
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: format!(
+                        "Observe the currently visible {target_app} game without changing it. Call `mcp__game__get_app_state` at least once. You may call only `mcp__game__wait` or `mcp__game__zoom` if another read-only view is needed. Never click, drag, focus-click, or invoke any other tool. Report only visible evidence using the required JSON schema; put anything uncertain in `uncertainties`."
+                    ),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: Some(observation_schema()),
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await
+            .map_err(|error| RunnerError::TurnFailed {
+                message: error.to_string(),
+            })?;
+
+        tokio::time::timeout(self.limits.turn_timeout, async {
+            let mut accumulator = ObservationAccumulator::default();
+            loop {
+                let event = thread
+                    .next_event()
+                    .await
+                    .map_err(|error| RunnerError::TurnFailed {
+                        message: error.to_string(),
+                    })?;
+                accumulator.observe(&event.msg);
+                match event.msg {
+                    EventMsg::TurnComplete(event) => {
+                        return accumulator.finish(
+                            &session.thread_id.to_string(),
+                            session.rollout_path.clone(),
+                            policy,
+                            &event,
+                        );
+                    }
+                    EventMsg::Error(event) => {
+                        return Err(RunnerError::TurnFailed {
+                            message: event.message,
+                        });
+                    }
+                    EventMsg::TurnAborted(event) => {
+                        return Err(RunnerError::TurnFailed {
+                            message: format!("turn aborted: {:?}", event.reason),
+                        });
+                    }
+                    EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::RequestPermissions(_)
+                    | EventMsg::RequestUserInput(_)
+                    | EventMsg::DynamicToolCallRequest(_) => {
+                        return Err(RunnerError::TurnFailed {
+                            message: "observation requested a forbidden interactive operation"
+                                .to_string(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .map_err(|_| RunnerError::TurnTimeout)?
+    }
 }
 
 #[derive(Default)]
@@ -186,6 +279,33 @@ fn invalid_report(message: impl Into<String>) -> RunnerError {
     RunnerError::InvalidModelReport {
         message: message.into(),
     }
+}
+
+fn observation_schema() -> serde_json::Value {
+    let bounded_string = json!({"type": "string", "maxLength": 2048});
+    let bounded_list = json!({
+        "type": "array",
+        "maxItems": 32,
+        "items": bounded_string,
+    });
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "visible_state_summary",
+            "game_phase",
+            "visible_objects",
+            "resources_and_choices",
+            "uncertainties",
+        ],
+        "properties": {
+            "visible_state_summary": {"type": "string", "maxLength": 2048},
+            "game_phase": {"type": "string", "maxLength": 2048},
+            "visible_objects": bounded_list,
+            "resources_and_choices": bounded_list,
+            "uncertainties": bounded_list,
+        },
+    })
 }
 
 #[cfg(test)]

@@ -140,6 +140,7 @@ async fn load_runner_config_inner(
 
     let mut features = Features::default();
     features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeHost);
     features.enable(Feature::CodeModeOnly);
     config
         .features
