@@ -1,12 +1,31 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::bail;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core_api::AskForApproval;
+use codex_core_api::Config;
+use codex_core_api::Constrained;
+use codex_core_api::Feature;
+use codex_core_api::Features;
+use codex_core_api::McpServerConfig;
+use codex_core_api::PermissionProfile;
+use codex_core_api::Permissions;
+use codex_core_api::WebSearchMode;
+use codex_game_runner::CampaignTools;
+use codex_game_runner::DecisionGate;
+use codex_game_runner::GAME_SERVER_NAME;
+use codex_game_runner::GENERATION;
+use codex_game_runner::GameCallPolicy;
+use codex_game_runner::RunnerRuntime;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::net::UnixListener;
@@ -34,6 +53,98 @@ pub struct HelperTrace {
     pub after_call_id: Option<String>,
     pub before_reference: String,
     pub after_reference: Option<String>,
+}
+
+pub struct RunningCampaign {
+    pub runtime: RunnerRuntime,
+    pub gate: Arc<DecisionGate>,
+    pub policy: Arc<GameCallPolicy>,
+    pub helper_task: tokio::task::JoinHandle<anyhow::Result<HelperTrace>>,
+    pub spool_root: PathBuf,
+}
+
+pub async fn start_runtime(
+    base_config: &Config,
+    temp: &TempDir,
+    scenario: FakeGameScenario,
+) -> anyhow::Result<RunningCampaign> {
+    let socket_path = temp.path().join("game.sock");
+    let listener = UnixListener::bind(&socket_path)?;
+    let spool_root = temp.path().join("screenshot-spool");
+    let helper_task = tokio::spawn(serve_fake_game_mcp(
+        listener,
+        spool_root.clone(),
+        scenario,
+    ));
+    let game_runner_bin = codex_utils_cargo_bin::cargo_bin("codex-game-runner")?;
+    let code_mode_host_bin = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
+    let game_server = serde_json::from_value::<McpServerConfig>(json!({
+        "command": game_runner_bin,
+        "args": ["__stdio-to-uds", socket_path],
+        "required": true,
+        "supports_parallel_tool_calls": false,
+        "default_tools_approval_mode": "approve",
+        "enabled_tools": ["get_app_state", "wait", "click", "drag", "focus_click"],
+        "startup_timeout_sec": 15,
+        "tool_timeout_sec": 5,
+    }))?;
+    let mut config = base_config.clone();
+    config.codex_self_exe = Some(game_runner_bin);
+    config
+        .mcp_servers
+        .set(HashMap::from([(GAME_SERVER_NAME.to_string(), game_server)]))
+        .context("set fake game MCP server")?;
+    let gate = Arc::new(DecisionGate::new(GENERATION));
+    let policy = Arc::new(GameCallPolicy::new(
+        "test-epoch".to_string(),
+        GENERATION,
+        Arc::clone(&gate),
+    ));
+    let runtime = RunnerRuntime::start_with_code_mode_host(
+        config,
+        Arc::clone(&policy),
+        CampaignTools::specs(),
+        code_mode_host_bin,
+    )
+    .await
+    .context("start runner runtime")?;
+    wait_for_mcp_server(&runtime.thread, GAME_SERVER_NAME)
+        .await
+        .context("wait for fake game MCP server")?;
+    Ok(RunningCampaign {
+        runtime,
+        gate,
+        policy,
+        helper_task,
+        spool_root,
+    })
+}
+
+pub fn configure_runner_surface(config: &mut Config) {
+    config.permissions = Permissions::from_approval_and_profile(
+        Constrained::allow_any(AskForApproval::Never),
+        Constrained::allow_any(PermissionProfile::read_only()),
+    )
+    .expect("set runner permissions");
+    let mut features = Features::default();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::CodeModeHost);
+    features.enable(Feature::CodeModeOnly);
+    assert!(config.features.set(features).is_ok());
+    config.code_mode.excluded_tool_namespaces = vec!["functions".to_string()];
+    assert!(config.web_search_mode.set(WebSearchMode::Disabled).is_ok());
+    config.ephemeral = false;
+    config.agents_enabled = false;
+    config.project_doc_max_bytes = 0;
+    config.include_permissions_instructions = false;
+    config.include_apps_instructions = false;
+    config.include_collaboration_mode_instructions = false;
+    config.include_skill_instructions = false;
+    config.include_environment_context = false;
+    config.orchestrator_skills_enabled = false;
+    config.orchestrator_mcp_enabled = false;
+    config.experimental_request_user_input_enabled = false;
+    config.update_plan_enabled = false;
 }
 
 pub async fn serve_fake_game_mcp(
