@@ -8,6 +8,10 @@ license.workspace = true
 name = "codex_game_runner"
 path = "src/lib.rs"
 
+[[bin]]
+name = "codex-game-runner"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
