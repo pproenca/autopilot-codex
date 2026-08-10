@@ -231,9 +231,7 @@ impl<C: Sync> ExtensionRegistry<C> {
     }
 
     /// Returns the registered MCP tool-call policy contributors.
-    pub fn mcp_tool_call_policy_contributors(
-        &self,
-    ) -> &[Arc<dyn McpToolCallPolicyContributor>] {
+    pub fn mcp_tool_call_policy_contributors(&self) -> &[Arc<dyn McpToolCallPolicyContributor>] {
         &self.mcp_tool_call_policy_contributors
     }
 

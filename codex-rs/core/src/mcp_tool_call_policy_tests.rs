@@ -19,10 +19,7 @@ struct AddFields {
 }
 
 impl McpToolCallPolicyContributor for AddFields {
-    fn evaluate<'a>(
-        &'a self,
-        input: McpToolCallPolicyInput<'a>,
-    ) -> McpToolCallPolicyFuture<'a> {
+    fn evaluate<'a>(&'a self, input: McpToolCallPolicyInput<'a>) -> McpToolCallPolicyFuture<'a> {
         Box::pin(async move {
             if let Some(key) = self.expected_existing_key {
                 assert!(input.request_meta.contains_key(key));
@@ -37,10 +34,7 @@ impl McpToolCallPolicyContributor for AddFields {
 struct Deny(&'static str);
 
 impl McpToolCallPolicyContributor for Deny {
-    fn evaluate<'a>(
-        &'a self,
-        _input: McpToolCallPolicyInput<'a>,
-    ) -> McpToolCallPolicyFuture<'a> {
+    fn evaluate<'a>(&'a self, _input: McpToolCallPolicyInput<'a>) -> McpToolCallPolicyFuture<'a> {
         Box::pin(async move {
             McpToolCallPolicyDecision::Deny {
                 reason: self.0.to_string(),
@@ -118,16 +112,10 @@ async fn policy_denial_returns_model_visible_reason() {
     let registry = builder.build();
     let arguments = json!({"x": 2, "y": 3});
 
-    let error = apply_mcp_tool_call_policies(
-        &registry,
-        "game",
-        "click",
-        "call-1",
-        Some(&arguments),
-        None,
-    )
-    .await
-    .expect_err("a denied call should return an error");
+    let error =
+        apply_mcp_tool_call_policies(&registry, "game", "click", "call-1", Some(&arguments), None)
+            .await
+            .expect_err("a denied call should return an error");
 
     assert_eq!(
         error.to_string(),

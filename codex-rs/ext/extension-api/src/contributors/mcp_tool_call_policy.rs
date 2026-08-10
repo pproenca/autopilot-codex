@@ -34,8 +34,5 @@ pub enum McpToolCallPolicyDecision {
 /// They may deny a call or return additional metadata. Codex evaluates
 /// contributors in registration order and rejects duplicate metadata keys.
 pub trait McpToolCallPolicyContributor: Send + Sync {
-    fn evaluate<'a>(
-        &'a self,
-        input: McpToolCallPolicyInput<'a>,
-    ) -> McpToolCallPolicyFuture<'a>;
+    fn evaluate<'a>(&'a self, input: McpToolCallPolicyInput<'a>) -> McpToolCallPolicyFuture<'a>;
 }

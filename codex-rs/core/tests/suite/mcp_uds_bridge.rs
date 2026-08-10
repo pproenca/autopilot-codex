@@ -34,10 +34,7 @@ const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 struct OwnerLeasePolicy;
 
 impl McpToolCallPolicyContributor for OwnerLeasePolicy {
-    fn evaluate<'a>(
-        &'a self,
-        input: McpToolCallPolicyInput<'a>,
-    ) -> McpToolCallPolicyFuture<'a> {
+    fn evaluate<'a>(&'a self, input: McpToolCallPolicyInput<'a>) -> McpToolCallPolicyFuture<'a> {
         Box::pin(async move {
             if input.server_name != SERVER_NAME {
                 return McpToolCallPolicyDecision::Allow {
@@ -196,10 +193,7 @@ async fn serve_fake_game_mcp(listener: UnixListener) -> anyhow::Result<Vec<Strin
         metadata.get("epoch").and_then(Value::as_str),
         Some("campaign-epoch")
     );
-    assert_eq!(
-        metadata.get("generation").and_then(Value::as_u64),
-        Some(7)
-    );
+    assert_eq!(metadata.get("generation").and_then(Value::as_u64), Some(7));
     methods.push("tools/call".to_string());
     let tools_call_id = tools_call
         .get("id")
@@ -315,9 +309,9 @@ text(JSON.stringify({ hasGameTool, structuredContent: result.structuredContent }
         .and_then(|developer| developer.get("tools"))
         .and_then(Value::as_array)
         .and_then(|namespaces| {
-            namespaces
-                .iter()
-                .find(|namespace| namespace.get("name").and_then(Value::as_str) == Some("functions"))
+            namespaces.iter().find(|namespace| {
+                namespace.get("name").and_then(Value::as_str) == Some("functions")
+            })
         })
         .and_then(|namespace| namespace.get("tools"))
         .and_then(Value::as_array)
@@ -363,9 +357,7 @@ text(JSON.stringify({ hasGameTool, structuredContent: result.structuredContent }
         })
     );
 
-    let methods = helper_task
-        .await
-        .context("fake game MCP task panicked")??;
+    let methods = helper_task.await.context("fake game MCP task panicked")??;
     assert_eq!(
         methods,
         vec![
