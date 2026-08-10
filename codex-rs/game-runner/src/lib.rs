@@ -1,4 +1,5 @@
 mod config;
+mod decision;
 mod helper;
 mod image_bridge;
 mod observation;
@@ -10,6 +11,12 @@ pub use config::MODEL;
 pub use config::RunnerDeployment;
 pub use config::RunnerError;
 pub use config::load_runner_config;
+pub use decision::ClickArguments;
+pub use decision::DecisionError;
+pub use decision::DragArguments;
+pub use decision::FocusClickArguments;
+pub use decision::MouseButton;
+pub use decision::PlannedAction;
 pub use helper::HelperLauncher;
 pub use helper::LaunchRequest;
 pub use helper::ReadinessLimits;
