@@ -82,7 +82,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         let [_, socket] = raw_args.as_slice() else {
             bail!("{BRIDGE_MODE} requires exactly one socket path");
         };
-        return codex_stdio_to_uds::run(Path::new(socket)).await;
+        return codex_game_runner::run_image_bridge(Path::new(socket)).await;
     }
 
     if let Err(err) = set_default_originator("codex_game_runner".to_string()) {

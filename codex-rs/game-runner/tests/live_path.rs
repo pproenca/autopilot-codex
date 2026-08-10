@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core_api::Config;
 use codex_core_api::ExtensionRegistryBuilder;
 use codex_core_api::Feature;
@@ -26,6 +28,8 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -52,7 +56,8 @@ async fn sol_observation_crosses_the_real_code_mode_and_uds_path() -> anyhow::Re
     let temp = TempDir::new()?;
     let socket_path = temp.path().join("game.sock");
     let listener = UnixListener::bind(&socket_path)?;
-    let helper_task = tokio::spawn(serve_fake_game_mcp(listener));
+    let spool_root = temp.path().join("screenshot-spool");
+    let helper_task = tokio::spawn(serve_fake_game_mcp(listener, spool_root.clone()));
     let tool_response = mount_sse_once(
         &server,
         responses::sse(vec![
@@ -61,7 +66,10 @@ async fn sol_observation_crosses_the_real_code_mode_and_uds_path() -> anyhow::Re
                 CALL_ID,
                 "exec",
                 r#"const result = await tools.mcp__game__get_app_state({});
-text(JSON.stringify(result.structuredContent));"#,
+for (const content of result.content || []) {
+  if (content.type === "image") image(content);
+  else if (content.type === "text") text(content.text);
+}"#,
             ),
             responses::ev_completed("response-1"),
         ]),
@@ -80,11 +88,11 @@ text(JSON.stringify(result.structuredContent));"#,
     )
     .await;
 
-    let codex_bin = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let game_runner_bin = codex_utils_cargo_bin::cargo_bin("codex-game-runner")?;
     let code_mode_host_bin = codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?;
     let game_server = serde_json::from_value::<McpServerConfig>(json!({
-        "command": codex_bin,
-        "args": ["stdio-to-uds", socket_path],
+        "command": game_runner_bin,
+        "args": ["__stdio-to-uds", socket_path],
         "required": true,
         "enabled_tools": ["get_app_state", "wait", "zoom"],
         "startup_timeout_sec": 15,
@@ -136,7 +144,7 @@ text(JSON.stringify(result.structuredContent));"#,
         (
             fixture.session_configured.thread_id.to_string().as_str(),
             helper_trace.call_id.as_str(),
-            Some("obs-1"),
+            Some("sha256:32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af"),
             expected_rollout.as_path(),
             "test-epoch",
             1,
@@ -173,6 +181,7 @@ text(JSON.stringify(result.structuredContent));"#,
             .custom_tool_call_output(CALL_ID)
             .is_object()
     );
+    assert_eq!(std::fs::read_dir(spool_root)?.count(), 0);
     assert_eq!(
         helper_trace.methods,
         vec![
@@ -240,7 +249,10 @@ fn exec_description(body: &Value) -> anyhow::Result<&str> {
         .context("Sol code-mode exec description is missing")
 }
 
-async fn serve_fake_game_mcp(listener: UnixListener) -> anyhow::Result<HelperTrace> {
+async fn serve_fake_game_mcp(
+    listener: UnixListener,
+    spool_root: std::path::PathBuf,
+) -> anyhow::Result<HelperTrace> {
     let (stream, _) = listener.accept().await?;
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
@@ -286,12 +298,24 @@ async fn serve_fake_game_mcp(listener: UnixListener) -> anyhow::Result<HelperTra
         .context("Codex metadata has no callId")?
         .to_string();
     methods.push("tools/call:get_app_state".to_string());
+    let blob_id = "00000000-0000-4000-8000-000000000001";
+    let jpeg = BASE64_STANDARD.decode("/9j/2Q==")?;
+    std::fs::create_dir_all(&spool_root)?;
+    std::fs::write(spool_root.join(format!("{blob_id}.jpg")), &jpeg)?;
     respond(
         &mut writer,
         &tools_call,
         json!({
-            "content": [{"type": "text", "text": "Captured observation obs-1."}],
-            "structuredContent": {"app": "Gambonanza", "observation_id": "obs-1"},
+            "content": [{"type": "text", "text": "screenshot metadata"}],
+            "structuredContent": {
+                "app": "Gambonanza",
+                "image_blob_id": blob_id,
+                "image_bytes": jpeg.len(),
+                "mime_type": "image/jpeg",
+                "sha256": format!("{:x}", Sha256::digest(&jpeg)),
+                "width": 2,
+                "height": 2,
+            },
             "isError": false,
         }),
     )

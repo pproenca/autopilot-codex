@@ -1,5 +1,6 @@
 mod config;
 mod helper;
+mod image_bridge;
 mod observation;
 mod policy;
 
@@ -12,6 +13,7 @@ pub use config::load_runner_config;
 pub use helper::HelperLauncher;
 pub use helper::LaunchRequest;
 pub use helper::ReadinessLimits;
+pub use image_bridge::run_image_bridge;
 pub use observation::ModelObservation;
 pub use observation::ObservationLimits;
 pub use observation::ObservationReport;

@@ -3206,14 +3206,16 @@ name = "codex-game-runner"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "codex-core-api",
- "codex-stdio-to-uds",
+ "codex-uds",
  "codex-utils-cargo-bin",
  "core_test_support",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
