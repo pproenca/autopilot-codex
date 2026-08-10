@@ -8,8 +8,6 @@ use super::DecisionSnapshot;
 use super::InvalidationReason;
 use super::MutationEvidence;
 use super::MutationResult;
-use super::OutcomeDraft;
-use super::OutcomeKind;
 use super::PlanCandidate;
 use super::PlanDraft;
 use super::PlannedAction;
@@ -17,6 +15,7 @@ use crate::ClickArguments;
 use crate::DragArguments;
 use crate::FocusClickArguments;
 use crate::MouseButton;
+use crate::OutcomeDraft;
 
 #[test]
 fn click_action_has_exact_arguments_and_stable_hash() -> anyhow::Result<()> {
@@ -315,8 +314,7 @@ fn interruption_and_owner_replacement_invalidate_plans() -> anyhow::Result<()> {
 fn outcome_requires_the_newest_post_mutation_observation() -> anyhow::Result<()> {
     let gate = DecisionGate::new(1);
     observe(&gate, "capture-before", "sha256:before")?;
-    let outcome = |reference: &str| OutcomeDraft {
-        outcome: OutcomeKind::Win,
+    let outcome = |reference: &str| OutcomeDraft::Win {
         observation_reference: reference.to_string(),
         visible_evidence_summary: "The victory screen is visible".to_string(),
         lesson: "The selected action won".to_string(),

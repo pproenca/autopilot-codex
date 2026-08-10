@@ -4,6 +4,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::outcome::OutcomeDraft;
+use crate::outcome::OutcomeValidationError;
+use crate::outcome::ReportedOutcome;
 use crate::planned_action::PlannedAction;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
@@ -40,8 +43,8 @@ pub enum DecisionError {
     OutcomeBeforeMutation,
     #[error("a fresh post-mutation observation is required")]
     MissingPostMutationObservation,
-    #[error("the outcome exceeds the 8 KiB limit")]
-    OutcomeTooLarge,
+    #[error(transparent)]
+    InvalidOutcome(#[from] OutcomeValidationError),
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -103,30 +106,6 @@ pub struct MutationEvidence {
     pub plan: AcceptedPlan,
     pub authorization: AuthorizedMutation,
     pub result: Option<MutationResult>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OutcomeKind {
-    CanaryComplete,
-    Loss,
-    Win,
-    TerminalBlock,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct OutcomeDraft {
-    pub outcome: OutcomeKind,
-    pub observation_reference: String,
-    pub visible_evidence_summary: String,
-    pub lesson: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ReportedOutcome {
-    pub observation: ObservationEvidence,
-    pub draft: OutcomeDraft,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
@@ -336,14 +315,7 @@ impl DecisionGate {
 
     pub fn report_outcome(&self, draft: OutcomeDraft) -> Result<ReportedOutcome, DecisionError> {
         let mut state = self.lock();
-        validate_outcome_strings(&draft)?;
-        if serde_json::to_vec(&draft)
-            .map_err(|_| DecisionError::ActionEncoding)?
-            .len()
-            > 8 * 1024
-        {
-            return Err(DecisionError::OutcomeTooLarge);
-        }
+        draft.validate()?;
         if state.snapshot.mutation.is_none() {
             return Err(DecisionError::OutcomeBeforeMutation);
         }
@@ -355,10 +327,10 @@ impl DecisionGate {
             .observation
             .clone()
             .ok_or(DecisionError::MissingPostMutationObservation)?;
-        if draft.observation_reference != observation.reference {
+        if draft.observation_reference() != observation.reference {
             return Err(DecisionError::StaleObservation {
                 expected: observation.reference,
-                actual: draft.observation_reference,
+                actual: draft.observation_reference().to_string(),
             });
         }
         let outcome = ReportedOutcome { observation, draft };
@@ -424,23 +396,6 @@ fn validate_plan_strings(draft: &PlanDraft) -> Result<(), DecisionError> {
             "candidate.predicted_visible_consequence",
             &candidate.predicted_visible_consequence,
         )?;
-    }
-    Ok(())
-}
-
-fn validate_outcome_strings(draft: &OutcomeDraft) -> Result<(), DecisionError> {
-    for (field, value) in [
-        (
-            "observation_reference",
-            draft.observation_reference.as_str(),
-        ),
-        (
-            "visible_evidence_summary",
-            draft.visible_evidence_summary.as_str(),
-        ),
-        ("lesson", draft.lesson.as_str()),
-    ] {
-        validate_string(field, value)?;
     }
     Ok(())
 }

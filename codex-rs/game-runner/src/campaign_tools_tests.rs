@@ -164,14 +164,14 @@ fn oversized_plan_is_rejected_without_changing_authority() -> anyhow::Result<()>
 }
 
 #[test]
-fn outcome_requires_after_evidence_and_accepts_a_visible_canary_result() -> anyhow::Result<()> {
+fn outcome_requires_after_evidence_and_accepts_a_visible_win() -> anyhow::Result<()> {
     let gate = Arc::new(observed_gate());
     let tools = CampaignTools::new(Arc::clone(&gate));
     let arguments = json!({
-        "outcome": "canary_complete",
+        "outcome": "win",
         "observation_reference": "sha256:before",
-        "visible_evidence_summary": "The expected settings screen is visible",
-        "lesson": "The selected action opened settings"
+        "visible_evidence_summary": "The victory screen is visible",
+        "lesson": "The selected action won"
     });
     assert!(
         !tools
@@ -224,11 +224,32 @@ fn specs_expose_only_two_strict_direct_tools() {
     for tool in &namespace.tools {
         let DynamicToolNamespaceTool::Function(function) = tool;
         assert!(!function.defer_loading);
-        assert_eq!(function.input_schema["additionalProperties"], false);
     }
+    let DynamicToolNamespaceTool::Function(record_plan) = &namespace.tools[0];
+    assert_eq!(record_plan.input_schema["additionalProperties"], false);
     let DynamicToolNamespaceTool::Function(report_outcome) = &namespace.tools[1];
+    let branches = report_outcome.input_schema["oneOf"]
+        .as_array()
+        .expect("outcomes use exhaustive schema branches");
     assert_eq!(
-        report_outcome.input_schema["properties"]["outcome"]["enum"],
-        json!(["canary_complete", "loss", "win", "terminal_block"])
+        branches
+            .iter()
+            .map(|branch| branch["properties"]["outcome"]["const"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("loss"), json!("win"), json!("terminal_block")]
     );
+    assert!(branches.iter().all(|branch| {
+        branch["additionalProperties"] == false
+            && branch["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|field| field == "outcome"))
+    }));
+    assert!(branches[0]["required"]
+        .as_array()
+        .is_some_and(|required| required.iter().any(|field| field == "strategy")));
+    assert!(branches[1..].iter().all(|branch| {
+        branch["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().all(|field| field != "strategy"))
+    }));
 }

@@ -26,7 +26,6 @@ impl CampaignLimits {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CampaignTerminalState {
-    CanaryComplete,
     Won,
     LossObserved,
     TerminalBlock,
@@ -35,7 +34,7 @@ pub enum CampaignTerminalState {
 impl CampaignTerminalState {
     pub fn is_success(self) -> bool {
         match self {
-            Self::CanaryComplete | Self::Won => true,
+            Self::Won => true,
             Self::LossObserved | Self::TerminalBlock => false,
         }
     }
@@ -71,8 +70,7 @@ impl CampaignProgress {
 
     fn on_turn_complete(&mut self, snapshot: &DecisionSnapshot) -> CampaignDirective {
         if let Some(outcome) = &snapshot.outcome {
-            return CampaignDirective::Complete(match outcome.draft.outcome {
-                OutcomeKind::CanaryComplete => CampaignTerminalState::CanaryComplete,
+            return CampaignDirective::Complete(match outcome.draft.kind() {
                 OutcomeKind::Win => CampaignTerminalState::Won,
                 OutcomeKind::Loss => CampaignTerminalState::LossObserved,
                 OutcomeKind::TerminalBlock => CampaignTerminalState::TerminalBlock,

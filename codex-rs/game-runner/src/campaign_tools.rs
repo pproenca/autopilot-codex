@@ -86,7 +86,7 @@ impl CampaignTools {
 
     fn report_outcome(&self, request: &DynamicToolCallRequest) -> DynamicToolResponse {
         let result =
-            bounded_decode::<OutcomeDraft>(&request.arguments, 8 * 1024).and_then(|draft| {
+            bounded_decode::<OutcomeDraft>(&request.arguments, 24 * 1024).and_then(|draft| {
                 self.gate
                     .report_outcome(draft)
                     .map_err(|error| error.to_string())
@@ -96,7 +96,7 @@ impl CampaignTools {
                 true,
                 json!({
                     "observation_reference": outcome.observation.reference,
-                    "outcome": outcome.draft.outcome,
+                    "outcome": outcome.draft.kind(),
                 }),
             ),
             Err(message) => rejected(message),
@@ -188,25 +188,13 @@ fn record_plan_spec() -> DynamicToolFunctionSpec {
 fn report_outcome_spec() -> DynamicToolFunctionSpec {
     DynamicToolFunctionSpec {
         name: "report_outcome".to_string(),
-        description:
-            "Classify fresh evidence as the expected canary result, a win, a loss, or a terminal block."
-                .to_string(),
-        input_schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "outcome", "observation_reference", "visible_evidence_summary", "lesson"
-            ],
-            "properties": {
-                "outcome": {
-                    "type": "string",
-                    "enum": ["canary_complete", "loss", "win", "terminal_block"]
-                },
-                "observation_reference": string_schema(),
-                "visible_evidence_summary": string_schema(),
-                "lesson": string_schema()
-            }
-        }),
+        description: "Classify fresh evidence as a win, a loss with a complete replacement strategy, or a terminal block."
+            .to_string(),
+        input_schema: json!({"oneOf": [
+            outcome_schema("loss", StrategyRequirement::Required),
+            outcome_schema("win", StrategyRequirement::Omitted),
+            outcome_schema("terminal_block", StrategyRequirement::Omitted)
+        ]}),
         defer_loading: false,
     }
 }
@@ -234,6 +222,67 @@ fn coordinate_schema() -> Value {
 
 fn string_schema() -> Value {
     json!({"type": "string", "maxLength": 2048})
+}
+
+#[derive(Clone, Copy)]
+enum StrategyRequirement {
+    Required,
+    Omitted,
+}
+
+fn outcome_schema(outcome: &str, strategy_requirement: StrategyRequirement) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        ("outcome".to_string(), json!({"const": outcome})),
+        ("observation_reference".to_string(), string_schema()),
+        ("visible_evidence_summary".to_string(), string_schema()),
+        ("lesson".to_string(), string_schema()),
+    ]);
+    let mut required = vec![
+        "outcome",
+        "observation_reference",
+        "visible_evidence_summary",
+        "lesson",
+    ];
+    match strategy_requirement {
+        StrategyRequirement::Required => {
+            properties.insert("strategy".to_string(), strategy_schema());
+            required.push("strategy");
+        }
+        StrategyRequirement::Omitted => {}
+    }
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties
+    })
+}
+
+fn strategy_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "summary", "confirmed_mechanics", "failed_approaches", "shop_and_boss_notes",
+            "next_attempt_priorities"
+        ],
+        "properties": {
+            "summary": string_schema(),
+            "confirmed_mechanics": strategy_items_schema(/*min_items*/ 0, /*max_items*/ 24),
+            "failed_approaches": strategy_items_schema(/*min_items*/ 0, /*max_items*/ 16),
+            "shop_and_boss_notes": strategy_items_schema(/*min_items*/ 0, /*max_items*/ 24),
+            "next_attempt_priorities": strategy_items_schema(/*min_items*/ 1, /*max_items*/ 8)
+        }
+    })
+}
+
+fn strategy_items_schema(min_items: usize, max_items: usize) -> Value {
+    json!({
+        "type": "array",
+        "minItems": min_items,
+        "maxItems": max_items,
+        "items": {"type": "string", "maxLength": 512}
+    })
 }
 
 #[cfg(test)]

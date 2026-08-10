@@ -21,6 +21,7 @@ use crate::PlanDraft;
 use crate::PlannedAction;
 use crate::PolicyAudit;
 use crate::ReportedOutcome;
+use crate::StrategyRecord;
 use crate::campaign_report::CampaignReportContext;
 
 use super::CampaignDirective;
@@ -106,12 +107,7 @@ fn mutation_snapshot(after: bool, outcome: Option<OutcomeKind>) -> DecisionSnaps
         observation: after_observation
             .clone()
             .expect("outcome needs after evidence"),
-        draft: OutcomeDraft {
-            outcome,
-            observation_reference: "sha256:after".to_string(),
-            visible_evidence_summary: "The terminal screen is visible".to_string(),
-            lesson: "Use the planned action".to_string(),
-        },
+        draft: outcome_draft(outcome),
     });
     DecisionSnapshot {
         owner_generation: 1,
@@ -131,6 +127,36 @@ fn mutation_snapshot(after: bool, outcome: Option<OutcomeKind>) -> DecisionSnaps
             mutation_attempts: 1,
             mutation_authorizations: 1,
             mutation_denials: 0,
+        },
+    }
+}
+
+fn outcome_draft(outcome: OutcomeKind) -> OutcomeDraft {
+    let observation_reference = "sha256:after".to_string();
+    let visible_evidence_summary = "The terminal screen is visible".to_string();
+    let lesson = "Use the planned action".to_string();
+    match outcome {
+        OutcomeKind::Loss => OutcomeDraft::Loss {
+            observation_reference,
+            visible_evidence_summary,
+            lesson,
+            strategy: StrategyRecord {
+                summary: "Change the next attempt".to_string(),
+                confirmed_mechanics: Vec::new(),
+                failed_approaches: vec!["The previous action lost".to_string()],
+                shop_and_boss_notes: Vec::new(),
+                next_attempt_priorities: vec!["Try a safer action".to_string()],
+            },
+        },
+        OutcomeKind::Win => OutcomeDraft::Win {
+            observation_reference,
+            visible_evidence_summary,
+            lesson,
+        },
+        OutcomeKind::TerminalBlock => OutcomeDraft::TerminalBlock {
+            observation_reference,
+            visible_evidence_summary,
+            lesson,
         },
     }
 }
@@ -164,7 +190,7 @@ fn sixth_turn_is_the_last_allowed_turn() {
 }
 
 #[test]
-fn fresh_after_evidence_without_model_confirmation_blocks_canary() {
+fn fresh_after_evidence_without_model_confirmation_blocks_campaign() {
     let mut progress = CampaignProgress::new(limits());
     progress.on_turn_started("turn-1".to_string());
     assert_eq!(
@@ -187,10 +213,6 @@ fn fresh_after_evidence_without_model_confirmation_blocks_canary() {
 #[test]
 fn reported_outcomes_map_to_terminal_states() {
     for (outcome, state) in [
-        (
-            OutcomeKind::CanaryComplete,
-            CampaignTerminalState::CanaryComplete,
-        ),
         (OutcomeKind::Win, CampaignTerminalState::Won),
         (OutcomeKind::Loss, CampaignTerminalState::LossObserved),
         (

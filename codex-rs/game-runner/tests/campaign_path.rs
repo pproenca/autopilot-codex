@@ -156,7 +156,7 @@ async fn planned_action_crosses_dynamic_tools_policy_and_real_uds_bridge() -> an
         )
     );
     let outcome = report.outcome.as_ref().context("reported outcome")?;
-    assert_eq!(outcome.draft.outcome, OutcomeKind::Win);
+    assert_eq!(outcome.draft.kind(), OutcomeKind::Win);
     assert_eq!(
         Some(&outcome.observation.reference),
         trace.after_reference.as_ref()
