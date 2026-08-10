@@ -64,11 +64,11 @@ pub enum RunnerError {
     #[error("the turn completed without a successful game/get_app_state call")]
     NoSuccessfulObservation,
     #[error("the model attempted {count} mutating game calls")]
-    MutationAttempted { count: usize },
+    MutationAttempted { count: u64 },
     #[error("the model attempted {count} unknown game tools")]
-    UnknownGameToolAttempted { count: usize },
+    UnknownGameToolAttempted { count: u64 },
     #[error("{count} mutating game calls reached MCP dispatch")]
-    MutationDispatched { count: usize },
+    MutationDispatched { count: u64 },
     #[error("model observation report is invalid: {message}")]
     InvalidModelReport { message: String },
     #[error("non-ephemeral thread did not expose a rollout path")]

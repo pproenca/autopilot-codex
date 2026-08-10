@@ -4,6 +4,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::action_batch::ActionBatch;
+use crate::action_batch::ActionBatchError;
 use crate::outcome::OutcomeDraft;
 use crate::outcome::OutcomeValidationError;
 use crate::outcome::ReportedOutcome;
@@ -35,8 +37,10 @@ pub enum DecisionError {
     MissingPlan,
     #[error("the mutation does not exactly match the accepted plan")]
     ActionMismatch,
-    #[error("the Stage 4A mutation budget is exhausted")]
-    MutationBudgetExhausted,
+    #[error("the eight-action turn batch is exhausted; verify the latest action and finish this turn")]
+    ActionBatchExhausted,
+    #[error("the action batch is closed by a reported campaign outcome")]
+    ActionBatchClosed,
     #[error("no authorized mutation matches call {call_id}")]
     MissingMutation { call_id: String },
     #[error("an outcome cannot be reported before a mutation")]
@@ -45,6 +49,8 @@ pub enum DecisionError {
     MissingPostMutationObservation,
     #[error(transparent)]
     InvalidOutcome(#[from] OutcomeValidationError),
+    #[error("counter {counter} overflowed")]
+    CounterOverflow { counter: String },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -110,11 +116,11 @@ pub struct MutationEvidence {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 pub struct DecisionAudit {
-    pub plans_accepted: usize,
-    pub plan_rejections: usize,
-    pub mutation_attempts: usize,
-    pub mutation_authorizations: usize,
-    pub mutation_denials: usize,
+    pub plans_accepted: u64,
+    pub plan_rejections: u64,
+    pub mutation_attempts: u64,
+    pub mutation_authorizations: u64,
+    pub mutation_denials: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -126,6 +132,7 @@ pub struct DecisionSnapshot {
     pub mutation: Option<MutationEvidence>,
     pub outcome: Option<ReportedOutcome>,
     pub requires_post_mutation_observation: bool,
+    pub batch_actions: u8,
     pub audit: DecisionAudit,
 }
 
@@ -144,7 +151,7 @@ pub struct DecisionGate {
 struct DecisionState {
     snapshot: DecisionSnapshot,
     plan_sequence: u64,
-    mutation_budget_consumed: bool,
+    batch: ActionBatch,
 }
 
 impl DecisionGate {
@@ -159,12 +166,24 @@ impl DecisionGate {
                     mutation: None,
                     outcome: None,
                     requires_post_mutation_observation: false,
+                    batch_actions: 0,
                     audit: DecisionAudit::default(),
                 },
                 plan_sequence: 0,
-                mutation_budget_consumed: false,
+                batch: ActionBatch::new(),
             }),
         }
+    }
+
+    pub fn begin_turn(&self) {
+        let mut state = self.lock();
+        state.batch.reset();
+        state.snapshot.observation = None;
+        state.snapshot.plan = None;
+        state.snapshot.mutation = None;
+        state.snapshot.outcome = None;
+        state.snapshot.requires_post_mutation_observation = false;
+        state.snapshot.batch_actions = state.batch.used();
     }
 
     pub fn begin_full_observation(&self) {
@@ -189,7 +208,10 @@ impl DecisionGate {
             width,
             height,
         };
-        state.snapshot.next_observation_generation += 1;
+        state.snapshot.next_observation_generation = checked_increment(
+            state.snapshot.next_observation_generation,
+            "next_observation_generation",
+        )?;
         state.snapshot.observation = Some(evidence.clone());
         state.snapshot.plan = None;
         state.snapshot.requires_post_mutation_observation = false;
@@ -230,7 +252,7 @@ impl DecisionGate {
             draft
                 .chosen_action
                 .validate(observation.width, observation.height)?;
-            state.plan_sequence += 1;
+            state.plan_sequence = checked_increment(state.plan_sequence, "plan_sequence")?;
             Ok(AcceptedPlan {
                 id: format!("plan-{}-{}", observation.generation, state.plan_sequence),
                 action_sha256: draft.chosen_action.action_sha256()?,
@@ -240,13 +262,19 @@ impl DecisionGate {
         })();
         match result {
             Ok(plan) => {
-                state.snapshot.audit.plans_accepted += 1;
+                state.snapshot.audit.plans_accepted =
+                    checked_increment(state.snapshot.audit.plans_accepted, "plans_accepted")?;
                 state.snapshot.plan = Some(plan.clone());
                 Ok(plan)
             }
             Err(error) => {
-                state.snapshot.audit.plan_rejections += 1;
-                Err(error)
+                match checked_increment(state.snapshot.audit.plan_rejections, "plan_rejections") {
+                    Ok(value) => {
+                        state.snapshot.audit.plan_rejections = value;
+                        Err(error)
+                    }
+                    Err(overflow) => Err(overflow),
+                }
             }
         }
     }
@@ -258,41 +286,56 @@ impl DecisionGate {
         call_id: &str,
     ) -> Result<AuthorizedMutation, DecisionError> {
         let mut state = self.lock();
-        state.snapshot.audit.mutation_attempts += 1;
-        let plan = state.snapshot.plan.take();
+        state.snapshot.audit.mutation_attempts =
+            checked_increment(state.snapshot.audit.mutation_attempts, "mutation_attempts")?;
+        let Some(plan) = state.snapshot.plan.take() else {
+            deny_mutation(&mut state)?;
+            return Err(DecisionError::MissingPlan);
+        };
+        if plan.draft.chosen_action.tool_name() != tool
+            || plan.draft.chosen_action.arguments() != *arguments
+        {
+            deny_mutation(&mut state)?;
+            return Err(DecisionError::ActionMismatch);
+        }
+        let next_authorizations = checked_increment(
+            state.snapshot.audit.mutation_authorizations,
+            "mutation_authorizations",
+        )?;
+        match state.batch.authorize() {
+            Ok(()) => {}
+            Err(ActionBatchError::Exhausted) => {
+                state.snapshot.audit.mutation_denials = checked_increment(
+                    state.snapshot.audit.mutation_denials,
+                    "mutation_denials",
+                )?;
+                return Err(DecisionError::ActionBatchExhausted);
+            }
+            Err(ActionBatchError::Closed) => {
+                state.snapshot.audit.mutation_denials = checked_increment(
+                    state.snapshot.audit.mutation_denials,
+                    "mutation_denials",
+                )?;
+                return Err(DecisionError::ActionBatchClosed);
+            }
+        }
+        let authorization = AuthorizedMutation {
+            call_id: call_id.to_string(),
+            operation_id: call_id.to_string(),
+            action_sha256: plan.action_sha256.clone(),
+            tool: tool.to_string(),
+            arguments: arguments.clone(),
+        };
         state.snapshot.observation = None;
         state.snapshot.requires_post_mutation_observation = true;
-        let result = (|| {
-            let plan = plan.ok_or(DecisionError::MissingPlan)?;
-            if state.mutation_budget_consumed {
-                return Err(DecisionError::MutationBudgetExhausted);
-            }
-            if plan.draft.chosen_action.tool_name() != tool
-                || plan.draft.chosen_action.arguments() != *arguments
-            {
-                return Err(DecisionError::ActionMismatch);
-            }
-            let authorization = AuthorizedMutation {
-                call_id: call_id.to_string(),
-                operation_id: call_id.to_string(),
-                action_sha256: plan.action_sha256.clone(),
-                tool: tool.to_string(),
-                arguments: arguments.clone(),
-            };
-            state.mutation_budget_consumed = true;
-            state.snapshot.mutation = Some(MutationEvidence {
-                plan,
-                authorization: authorization.clone(),
-                result: None,
-            });
-            Ok(authorization)
-        })();
-        if result.is_ok() {
-            state.snapshot.audit.mutation_authorizations += 1;
-        } else {
-            state.snapshot.audit.mutation_denials += 1;
-        }
-        result
+        state.snapshot.audit.mutation_authorizations = next_authorizations;
+        state.snapshot.batch_actions = state.batch.used();
+        state.snapshot.mutation = Some(MutationEvidence {
+            plan,
+            authorization: authorization.clone(),
+            result: None,
+        });
+        Ok(authorization)
     }
 
     pub fn record_mutation_result(
@@ -316,6 +359,9 @@ impl DecisionGate {
     pub fn report_outcome(&self, draft: OutcomeDraft) -> Result<ReportedOutcome, DecisionError> {
         let mut state = self.lock();
         draft.validate()?;
+        if state.batch.is_closed() {
+            return Err(DecisionError::ActionBatchClosed);
+        }
         if state.snapshot.mutation.is_none() {
             return Err(DecisionError::OutcomeBeforeMutation);
         }
@@ -334,6 +380,7 @@ impl DecisionGate {
             });
         }
         let outcome = ReportedOutcome { observation, draft };
+        state.batch.close();
         state.snapshot.outcome = Some(outcome.clone());
         Ok(outcome)
     }
@@ -356,6 +403,22 @@ impl DecisionGate {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn deny_mutation(state: &mut DecisionState) -> Result<(), DecisionError> {
+    state.snapshot.observation = None;
+    state.snapshot.requires_post_mutation_observation = true;
+    state.snapshot.audit.mutation_denials =
+        checked_increment(state.snapshot.audit.mutation_denials, "mutation_denials")?;
+    Ok(())
+}
+
+fn checked_increment(value: u64, counter: &str) -> Result<u64, DecisionError> {
+    value
+        .checked_add(1)
+        .ok_or_else(|| DecisionError::CounterOverflow {
+            counter: counter.to_string(),
+        })
 }
 
 fn has_positive_number(value: &Value) -> bool {

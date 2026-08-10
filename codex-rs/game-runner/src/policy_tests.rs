@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::ClickArguments;
 use crate::DecisionGate;
 use crate::MutationResult;
+use crate::MAX_ACTIONS_PER_TURN;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
@@ -119,24 +120,40 @@ async fn mismatched_and_argumentless_mutations_consume_the_plan() -> anyhow::Res
 }
 
 #[tokio::test]
-async fn second_planned_mutation_is_denied() -> anyhow::Result<()> {
+async fn ninth_planned_mutation_is_denied_without_helper_metadata() -> anyhow::Result<()> {
     let gate = Arc::new(DecisionGate::new(1));
-    install_click_plan(&gate, "sha256:before", 180)?;
     let policy = GameCallPolicy::new("epoch-1".to_string(), 1, Arc::clone(&gate));
-    let first = json!({"x": 180, "y": 640});
-    assert!(matches!(
-        evaluate(&policy, "click", "mutation-1", Some(&first)).await,
-        McpToolCallPolicyDecision::Allow { .. }
-    ));
-    gate.record_mutation_result("mutation-1", MutationResult::Success)?;
-    install_click_plan(&gate, "sha256:after", 10)?;
-    let second = json!({"x": 10, "y": 640});
+    let arguments = json!({"x": 180, "y": 640});
+    for action_number in 1..=MAX_ACTIONS_PER_TURN {
+        install_click_plan(
+            &gate,
+            &format!("sha256:before-{action_number}"),
+            /*x*/ 180,
+        )?;
+        let call_id = format!("mutation-{action_number}");
+        assert!(matches!(
+            evaluate(&policy, "click", &call_id, Some(&arguments)).await,
+            McpToolCallPolicyDecision::Allow { .. }
+        ));
+        gate.record_mutation_result(&call_id, MutationResult::Success)?;
+    }
+    install_click_plan(&gate, "sha256:after-8", /*x*/ 180)?;
 
     assert_eq!(
-        evaluate(&policy, "click", "mutation-2", Some(&second)).await,
+        evaluate(&policy, "click", "mutation-9", Some(&arguments)).await,
         McpToolCallPolicyDecision::Deny {
-            reason: "the Stage 4A mutation budget is exhausted".to_string(),
+            reason: "the eight-action turn batch is exhausted; verify the latest action and finish this turn"
+                .to_string(),
         }
+    );
+    let snapshot = gate.snapshot();
+    assert_eq!(snapshot.batch_actions, MAX_ACTIONS_PER_TURN);
+    assert_eq!(
+        snapshot
+            .mutation
+            .as_ref()
+            .map(|mutation| mutation.authorization.operation_id.as_str()),
+        Some("mutation-8")
     );
     Ok(())
 }

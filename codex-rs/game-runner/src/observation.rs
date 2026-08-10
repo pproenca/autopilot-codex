@@ -39,8 +39,8 @@ pub struct ObservationReport {
     pub rollout_path: PathBuf,
     pub epoch: String,
     pub generation: u64,
-    pub mutation_attempts: usize,
-    pub mutation_dispatches: usize,
+    pub mutation_attempts: u64,
+    pub mutation_dispatches: u64,
     pub model: ModelObservation,
 }
 

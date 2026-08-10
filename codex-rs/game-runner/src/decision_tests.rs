@@ -16,6 +16,7 @@ use crate::DragArguments;
 use crate::FocusClickArguments;
 use crate::MouseButton;
 use crate::OutcomeDraft;
+use crate::MAX_ACTIONS_PER_TURN;
 
 #[test]
 fn click_action_has_exact_arguments_and_stable_hash() -> anyhow::Result<()> {
@@ -196,6 +197,7 @@ fn one_observation_plan_mutation_and_after_observation_is_complete() -> anyhow::
             }),
             outcome: None,
             requires_post_mutation_observation: false,
+            batch_actions: 1,
             audit: DecisionAudit {
                 plans_accepted: 1,
                 plan_rejections: 0,
@@ -206,6 +208,16 @@ fn one_observation_plan_mutation_and_after_observation_is_complete() -> anyhow::
         }
     );
     Ok(())
+}
+
+#[test]
+fn decision_counters_reject_overflow() {
+    assert_eq!(
+        super::checked_increment(u64::MAX, "plans_accepted"),
+        Err(DecisionError::CounterOverflow {
+            counter: "plans_accepted".to_string(),
+        })
+    );
 }
 
 #[test]
@@ -265,20 +277,95 @@ fn stale_plan_and_mismatched_mutation_are_rejected_and_consumed() -> anyhow::Res
 }
 
 #[test]
-fn authorized_mutation_exhausts_the_stage_budget() -> anyhow::Result<()> {
+fn repeatable_action_batch_allows_eight_verified_cycles_and_resets() -> anyhow::Result<()> {
     let gate = DecisionGate::new(1);
-    observe(&gate, "capture-before", "sha256:before")?;
-    gate.record_plan(plan_draft("sha256:before".to_string(), click(180, 640)))?;
-    gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
-    gate.record_mutation_result("mutation-1", MutationResult::Success)?;
-    observe(&gate, "capture-after", "sha256:after")?;
-    gate.record_plan(plan_draft("sha256:after".to_string(), click(10, 10)))?;
+    let mut reference = "sha256:before".to_string();
+    observe(&gate, "capture-before", &reference)?;
+    let mut latest_plan = None;
+    let mut latest_authorization = None;
+    let mut latest_observation = None;
+    for action_number in 1..=MAX_ACTIONS_PER_TURN {
+        let plan = gate.record_plan(plan_draft(reference, click(180, 640)))?;
+        let call_id = format!("mutation-{action_number}");
+        let authorization =
+            gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), &call_id)?;
+        gate.record_mutation_result(&call_id, MutationResult::Success)?;
+        reference = format!("sha256:after-{action_number}");
+        observe(&gate, &format!("capture-after-{action_number}"), &reference)?;
+        latest_plan = Some(plan);
+        latest_authorization = Some(authorization);
+        latest_observation = gate.snapshot().observation;
+    }
+
+    gate.record_plan(plan_draft(reference, click(10, 10)))?;
 
     assert_eq!(
-        gate.prepare_mutation("click", &json!({"x": 10, "y": 10}), "mutation-2"),
-        Err(DecisionError::MutationBudgetExhausted)
+        gate.prepare_mutation("click", &json!({"x": 10, "y": 10}), "mutation-9"),
+        Err(DecisionError::ActionBatchExhausted)
     );
-    assert_eq!(gate.snapshot().plan, None);
+    assert_eq!(
+        gate.snapshot(),
+        DecisionSnapshot {
+            owner_generation: 1,
+            next_observation_generation: 10,
+            observation: latest_observation,
+            plan: None,
+            mutation: Some(MutationEvidence {
+                plan: latest_plan.expect("eighth plan"),
+                authorization: latest_authorization.expect("eighth authorization"),
+                result: Some(MutationResult::Success),
+            }),
+            outcome: None,
+            requires_post_mutation_observation: false,
+            batch_actions: MAX_ACTIONS_PER_TURN,
+            audit: DecisionAudit {
+                plans_accepted: 9,
+                plan_rejections: 0,
+                mutation_attempts: 9,
+                mutation_authorizations: 8,
+                mutation_denials: 1,
+            },
+        }
+    );
+
+    gate.begin_turn();
+    let reset = gate.snapshot();
+    assert_eq!(
+        (
+            reset.owner_generation,
+            reset.next_observation_generation,
+            reset.observation,
+            reset.plan,
+            reset.mutation,
+            reset.outcome,
+            reset.batch_actions,
+            reset.audit,
+        ),
+        (
+            1,
+            10,
+            None,
+            None,
+            None,
+            None,
+            0,
+            DecisionAudit {
+                plans_accepted: 9,
+                plan_rejections: 0,
+                mutation_attempts: 9,
+                mutation_authorizations: 8,
+                mutation_denials: 1,
+            },
+        )
+    );
+    assert_eq!(
+        gate.record_plan(plan_draft("sha256:turn-2".to_string(), click(10, 10))),
+        Err(DecisionError::MissingObservation)
+    );
+    observe(&gate, "capture-turn-2", "sha256:turn-2")?;
+    let plan = gate.record_plan(plan_draft("sha256:turn-2".to_string(), click(10, 10)))?;
+    assert_eq!(plan.id, "plan-10-10");
+    gate.prepare_mutation("click", &json!({"x": 10, "y": 10}), "mutation-10")?;
     Ok(())
 }
 

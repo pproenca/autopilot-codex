@@ -38,6 +38,7 @@ fn empty_snapshot() -> DecisionSnapshot {
         mutation: None,
         outcome: None,
         requires_post_mutation_observation: false,
+        batch_actions: 0,
         audit: DecisionAudit::default(),
     }
 }
@@ -121,6 +122,7 @@ fn mutation_snapshot(after: bool, outcome: Option<OutcomeKind>) -> DecisionSnaps
         }),
         outcome: reported,
         requires_post_mutation_observation: !after,
+        batch_actions: 1,
         audit: DecisionAudit {
             plans_accepted: 1,
             plan_rejections: 0,

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_core_api::McpToolCallPolicyContributor;
@@ -17,7 +17,7 @@ pub struct GameCallPolicy {
     epoch: String,
     generation: u64,
     gate: Arc<DecisionGate>,
-    unknown_tool_attempts: AtomicUsize,
+    unknown_tool_attempts: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,9 +28,9 @@ pub struct OwnerLease {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct PolicyAudit {
-    pub mutation_attempts: usize,
-    pub unknown_tool_attempts: usize,
-    pub mutation_authorizations: usize,
+    pub mutation_attempts: u64,
+    pub unknown_tool_attempts: u64,
+    pub mutation_authorizations: u64,
 }
 
 impl GameCallPolicy {
@@ -39,7 +39,7 @@ impl GameCallPolicy {
             epoch,
             generation,
             gate,
-            unknown_tool_attempts: AtomicUsize::new(0),
+            unknown_tool_attempts: AtomicU64::new(0),
         }
     }
 
@@ -70,6 +70,14 @@ impl GameCallPolicy {
         McpToolCallPolicyDecision::Allow {
             additional_request_meta,
         }
+    }
+
+    fn record_unknown_tool_attempt(&self) {
+        let _ = self.unknown_tool_attempts.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |value| value.checked_add(1),
+        );
     }
 }
 
@@ -122,13 +130,13 @@ impl McpToolCallPolicyContributor for GameCallPolicy {
                     }
                 }
                 "zoom" => {
-                    self.unknown_tool_attempts.fetch_add(1, Ordering::Relaxed);
+                    self.record_unknown_tool_attempt();
                     McpToolCallPolicyDecision::Deny {
                         reason: "unknown game tool `zoom` is disabled".to_string(),
                     }
                 }
                 tool_name => {
-                    self.unknown_tool_attempts.fetch_add(1, Ordering::Relaxed);
+                    self.record_unknown_tool_attempt();
                     McpToolCallPolicyDecision::Deny {
                         reason: format!("unknown game tool `{tool_name}` is disabled"),
                     }
