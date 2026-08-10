@@ -57,6 +57,8 @@ pub enum RunnerError {
     },
     #[error("observation turn exceeded its deadline")]
     TurnTimeout,
+    #[error("campaign execution failed: {message}")]
+    CampaignFailed { message: String },
     #[error("observation turn failed: {message}")]
     TurnFailed { message: String },
     #[error("the turn completed without a successful game/get_app_state call")]

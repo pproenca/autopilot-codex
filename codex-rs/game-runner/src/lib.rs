@@ -1,3 +1,5 @@
+mod campaign;
+mod campaign_report;
 mod campaign_tools;
 mod config;
 mod decision;
@@ -6,6 +8,10 @@ mod image_bridge;
 mod observation;
 mod policy;
 
+pub use campaign::CampaignLimits;
+pub use campaign::CampaignRun;
+pub use campaign::CampaignTerminalState;
+pub use campaign_report::CampaignReport;
 pub use campaign_tools::CAMPAIGN_TOOL_NAMESPACE;
 pub use campaign_tools::CampaignToolError;
 pub use campaign_tools::CampaignTools;
