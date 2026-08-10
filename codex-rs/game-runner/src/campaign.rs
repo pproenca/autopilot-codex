@@ -145,6 +145,9 @@ impl CampaignRun {
     }
 }
 
+#[path = "campaign_loop.rs"]
+mod campaign_loop;
+
 #[cfg(test)]
 #[path = "campaign_tests.rs"]
 mod tests;
