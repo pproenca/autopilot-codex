@@ -25,10 +25,10 @@ use crate::ObservationEvidence;
 use crate::ReportedOutcome;
 use crate::RunnerError;
 use crate::campaign_progress::CampaignProgressError;
-use crate::campaign_report::CampaignReportContext;
 use crate::campaign_prompt::ResumePromptContext;
 use crate::campaign_prompt::initial_prompt;
 use crate::campaign_prompt::resume_prompt;
+use crate::campaign_report::CampaignReportContext;
 
 impl CampaignExecutionContext {
     pub(super) fn start(&self) -> &CampaignStart {
@@ -99,14 +99,16 @@ impl CampaignExecutionContext {
             .snapshot()
             .await
             .map_err(|error| durability_error(policy, error))?;
-        let matches_authorization = checkpoint.unresolved_mutation.as_ref().is_some_and(
-            |mutation| {
-                mutation.operation_id == authorization.operation_id
-                    && mutation.action_sha256 == authorization.action_sha256
-                    && mutation.tool == authorization.tool
-                    && mutation.action_sequence == checkpoint.summary.total_actions
-            },
-        );
+        let matches_authorization =
+            checkpoint
+                .unresolved_mutation
+                .as_ref()
+                .is_some_and(|mutation| {
+                    mutation.operation_id == authorization.operation_id
+                        && mutation.action_sha256 == authorization.action_sha256
+                        && mutation.tool == authorization.tool
+                        && mutation.action_sequence == checkpoint.summary.total_actions
+                });
         if !matches_authorization {
             return Err(durability_error(
                 policy,

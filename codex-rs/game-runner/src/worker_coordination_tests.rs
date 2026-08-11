@@ -12,11 +12,8 @@ use super::game_tool_failure_signal;
 #[test]
 fn failed_known_game_tool_creates_one_bounded_directive_exchange() -> anyhow::Result<()> {
     let error = "é".repeat(2 * 1024);
-    let (signal, response) = game_tool_failure_signal(&tool_end(
-        "click",
-        Err(error),
-    ))?
-    .expect("failed game call should produce a signal");
+    let (signal, response) = game_tool_failure_signal(&tool_end("click", Err(error)))?
+        .expect("failed game call should produce a signal");
 
     assert_eq!(signal.tool, "click");
     assert!(signal.summary.len() <= 2 * 1024);
@@ -25,10 +22,7 @@ fn failed_known_game_tool_creates_one_bounded_directive_exchange() -> anyhow::Re
         .response
         .send(WorkerDirective::PauseForRecovery)
         .expect("directive receiver should remain open");
-    assert_eq!(
-        response.blocking_recv()?,
-        WorkerDirective::PauseForRecovery
-    );
+    assert_eq!(response.blocking_recv()?, WorkerDirective::PauseForRecovery);
     Ok(())
 }
 
@@ -70,10 +64,7 @@ fn structured_error_uses_a_fixed_non_payload_summary() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn tool_end(
-    tool: &str,
-    result: Result<CallToolResult, String>,
-) -> McpToolCallEndEvent {
+fn tool_end(tool: &str, result: Result<CallToolResult, String>) -> McpToolCallEndEvent {
     McpToolCallEndEvent {
         call_id: "call-1".to_string(),
         invocation: McpInvocation {

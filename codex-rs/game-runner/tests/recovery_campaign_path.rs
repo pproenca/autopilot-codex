@@ -98,11 +98,7 @@ async fn run_crash_boundary(boundary: CrashBoundary) -> anyhow::Result<()> {
     let response_mock = mount_sse_sequence(
         &server,
         vec![
-            exec_response(
-                "initial-response",
-                "initial-exec",
-                initial_script(boundary),
-            ),
+            exec_response("initial-response", "initial-exec", initial_script(boundary)),
             exec_response("resume-response", "resume-exec", resumed_script()),
         ],
     )
@@ -117,15 +113,21 @@ async fn run_crash_boundary(boundary: CrashBoundary) -> anyhow::Result<()> {
     )?;
 
     let original = wait_for_checkpoint(temp.path(), |checkpoint| reached(boundary, checkpoint))
-    .await
-    .with_context(|| {
-        let requests = response_mock.requests();
-        format!("mock received {} requests before the boundary", requests.len())
-    })?;
+        .await
+        .with_context(|| {
+            let requests = response_mock.requests();
+            format!(
+                "mock received {} requests before the boundary",
+                requests.len()
+            )
+        })?;
     std::fs::write(&signal_path, [])?;
     release.notify_one();
     let status = child.wait().await?;
-    anyhow::ensure!(status.success(), "crash fixture failed to shut down cleanly");
+    anyhow::ensure!(
+        status.success(),
+        "crash fixture failed to shut down cleanly"
+    );
     restore_running_checkpoint(temp.path(), &original)?;
 
     let mut controller = CampaignController::open(controller_config(
@@ -390,9 +392,7 @@ fn exec_response(response_id: &str, call_id: &str, script: String) -> String {
 
 fn initial_script(boundary: CrashBoundary) -> String {
     let tail = match boundary {
-        CrashBoundary::Plan => {
-            "await new Promise(resolve => setTimeout(resolve, 60000));"
-        }
+        CrashBoundary::Plan => "await new Promise(resolve => setTimeout(resolve, 60000));",
         CrashBoundary::Authorization => "await tools.mcp__game__click({x: 180, y: 640});",
         CrashBoundary::Result => {
             "await tools.mcp__game__click({x: 180, y: 640});\nawait new Promise(resolve => setTimeout(resolve, 60000));"

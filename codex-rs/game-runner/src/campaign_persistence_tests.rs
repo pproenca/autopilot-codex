@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use crate::AuthorizedMutation;
 use crate::CHECKPOINT_VERSION;
 use crate::CampaignCheckpoint;
 use crate::CampaignCheckpointStore;
@@ -17,7 +18,6 @@ use crate::DurableObservation;
 use crate::MutationResult;
 use crate::ObservationEvidence;
 use crate::PolicyAudit;
-use crate::AuthorizedMutation;
 
 use super::CampaignPersistence;
 use super::MutationCheckpointUpdate;
@@ -150,13 +150,19 @@ async fn mutation_protocol_persists_pending_result_and_confirming_observation() 
     persistence
         .finish_mutation("call-1", MutationResult::Success)
         .await?;
-    expected.unresolved_mutation.as_mut().expect("mutation").result =
-        DurableMutationResult::Success;
+    expected
+        .unresolved_mutation
+        .as_mut()
+        .expect("mutation")
+        .result = DurableMutationResult::Success;
     assert_eq!(persistence.snapshot().await?, expected);
 
     persistence.mark_unresolved_indeterminate().await?;
-    expected.unresolved_mutation.as_mut().expect("mutation").result =
-        DurableMutationResult::Indeterminate;
+    expected
+        .unresolved_mutation
+        .as_mut()
+        .expect("mutation")
+        .result = DurableMutationResult::Indeterminate;
     assert_eq!(persistence.snapshot().await?, expected);
 
     persistence

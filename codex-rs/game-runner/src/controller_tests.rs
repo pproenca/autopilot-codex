@@ -19,7 +19,8 @@ use crate::RunnerDeployment;
 use crate::campaign_persistence::tests::checkpoint;
 
 #[tokio::test]
-async fn open_idle_controller_rejects_invalid_commands_and_retains_the_lock() -> anyhow::Result<()> {
+async fn open_idle_controller_rejects_invalid_commands_and_retains_the_lock() -> anyhow::Result<()>
+{
     let codex_home = tempfile::tempdir()?;
     let mut controller = CampaignController::open(config(codex_home.path().to_path_buf())).await?;
 
@@ -100,17 +101,14 @@ async fn paused_campaign_requires_resume_but_can_be_stopped_durably() -> anyhow:
     controller.shutdown().await?;
     assert!(store.path().exists());
 
-    let mut controller =
-        CampaignController::open(config(codex_home.path().to_path_buf())).await?;
+    let mut controller = CampaignController::open(config(codex_home.path().to_path_buf())).await?;
     let mut events = controller.subscribe();
     assert_eq!(
         controller.command(CampaignCommand::Stop).await?,
         CampaignStatus::Idle
     );
     loop {
-        if events.recv().await?
-            == CampaignEvent::StatusChanged(CampaignStatus::Stopping)
-        {
+        if events.recv().await? == CampaignEvent::StatusChanged(CampaignStatus::Stopping) {
             break;
         }
     }

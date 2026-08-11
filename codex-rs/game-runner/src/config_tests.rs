@@ -6,8 +6,8 @@ use codex_core_api::ReasoningEffort;
 use codex_core_api::WebSearchMode;
 use pretty_assertions::assert_eq;
 
-use super::RunnerDeployment;
 use super::BridgeFocus;
+use super::RunnerDeployment;
 use super::load_runner_config;
 use super::load_runner_config_for_focus;
 

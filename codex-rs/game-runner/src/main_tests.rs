@@ -76,9 +76,8 @@ fn production_run_returns_a_campaign_report() {
 #[test]
 fn paused_controller_error_maps_to_runner_resume_requirement() {
     let path = PathBuf::from("/tmp/codex-home/game-runner/campaign.json");
-    let error = map_controller_error(ControllerError::CampaignRequiresResume {
-        path: path.clone(),
-    });
+    let error =
+        map_controller_error(ControllerError::CampaignRequiresResume { path: path.clone() });
 
     assert!(matches!(
         error.downcast_ref::<RunnerError>(),

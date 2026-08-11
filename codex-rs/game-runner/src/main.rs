@@ -9,11 +9,11 @@ use codex_core_api::Arg0DispatchPaths;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::find_codex_home;
 use codex_core_api::set_default_originator;
+use codex_game_runner::BridgeFocus;
 use codex_game_runner::CampaignCommand;
 use codex_game_runner::CampaignController;
 use codex_game_runner::CampaignLimits;
 use codex_game_runner::CampaignReport;
-use codex_game_runner::BridgeFocus;
 use codex_game_runner::ControllerConfig;
 use codex_game_runner::ControllerError;
 use codex_game_runner::RunnerDeployment;
@@ -108,9 +108,9 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignR
         (Ok(report), Ok(())) => Ok(report),
         (Ok(_), Err(error)) => Err(map_controller_error(error)),
         (Err(error), Ok(())) => Err(map_controller_error(error)),
-        (Err(primary), Err(cleanup)) => bail!(
-            "game campaign failed: {primary}; controller cleanup failed: {cleanup}"
-        ),
+        (Err(primary), Err(cleanup)) => {
+            bail!("game campaign failed: {primary}; controller cleanup failed: {cleanup}")
+        }
     }
 }
 

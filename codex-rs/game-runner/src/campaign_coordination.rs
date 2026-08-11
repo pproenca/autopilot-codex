@@ -42,7 +42,8 @@ impl CampaignExecutionContext {
         else {
             return Ok(None);
         };
-        let Some((signal, response)) = game_tool_failure_signal(event).map_err(coordination_error)?
+        let Some((signal, response)) =
+            game_tool_failure_signal(event).map_err(coordination_error)?
         else {
             return Ok(None);
         };

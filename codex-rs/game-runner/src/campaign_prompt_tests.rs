@@ -1,10 +1,10 @@
 use pretty_assertions::assert_eq;
 
+use super::ResumePromptContext;
 use super::continuation_prompt;
 use super::initial_prompt;
 use super::new_attempt_prompt;
 use super::resume_prompt;
-use super::ResumePromptContext;
 use crate::DurableMutation;
 use crate::DurableMutationResult;
 use crate::StrategyRecord;

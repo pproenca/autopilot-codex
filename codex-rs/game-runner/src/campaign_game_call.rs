@@ -70,9 +70,7 @@ pub(super) async fn finish_game_call_event(
         SafeBoundaryDirective::None | SafeBoundaryDirective::WaitForActiveCall => {}
     }
     match context.game_tool_failure_directive(event).await? {
-        Some(WorkerDirective::PauseForRecovery) => {
-            Ok(GameCallEndDirective::PauseForRecovery)
-        }
+        Some(WorkerDirective::PauseForRecovery) => Ok(GameCallEndDirective::PauseForRecovery),
         Some(WorkerDirective::Continue) | None => Ok(GameCallEndDirective::Continue),
     }
 }

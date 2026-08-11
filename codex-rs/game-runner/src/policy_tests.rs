@@ -7,15 +7,15 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::ClickArguments;
 use crate::CampaignPersistence;
+use crate::ClickArguments;
 use crate::DecisionGate;
 use crate::MAX_ACTIONS_PER_TURN;
 use crate::MutationResult;
+use crate::OwnerLeaseState;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
-use crate::OwnerLeaseState;
 
 use super::GameCallPolicy;
 use super::PolicyAudit;
@@ -158,10 +158,7 @@ async fn checkpoint_failure_denies_dispatch_and_closes_the_mutation_lane() -> an
             reason: "campaign checkpoint write failed before mutation dispatch".to_string(),
         }
     );
-    assert_eq!(
-        persistence.snapshot().await?.unresolved_mutation,
-        None
-    );
+    assert_eq!(persistence.snapshot().await?.unresolved_mutation, None);
     assert_eq!(policy.mutation_lane_is_open(), false);
     Ok(())
 }

@@ -226,11 +226,13 @@ impl CampaignCheckpoint {
         if observation
             .confirms_action_sequence
             .is_some_and(|sequence| sequence == 0 || sequence > self.summary.total_actions)
-            || observation.confirms_action_sequence.is_some_and(|sequence| {
-                self.unresolved_mutation
-                    .as_ref()
-                    .is_some_and(|mutation| sequence >= mutation.action_sequence)
-            })
+            || observation
+                .confirms_action_sequence
+                .is_some_and(|sequence| {
+                    self.unresolved_mutation
+                        .as_ref()
+                        .is_some_and(|mutation| sequence >= mutation.action_sequence)
+                })
         {
             return Err(CheckpointValidationError::InvalidSequence {
                 field: "latest_observation.confirms_action_sequence",
@@ -314,9 +316,7 @@ impl CampaignCheckpoint {
     }
 }
 
-fn validate_state_strings(
-    state: &DurableCampaignState,
-) -> Result<(), CheckpointValidationError> {
+fn validate_state_strings(state: &DurableCampaignState) -> Result<(), CheckpointValidationError> {
     match state {
         DurableCampaignState::Running
         | DurableCampaignState::Paused {
@@ -324,8 +324,7 @@ fn validate_state_strings(
         } => Ok(()),
         DurableCampaignState::Paused {
             reason:
-                PauseReason::HelperUnavailable { summary }
-                | PauseReason::DurabilityFailure { summary },
+                PauseReason::HelperUnavailable { summary } | PauseReason::DurabilityFailure { summary },
         } => validate_string("pause_reason.summary", summary),
         DurableCampaignState::Won { evidence_reference } => {
             validate_string("state.evidence_reference", evidence_reference)
@@ -333,10 +332,7 @@ fn validate_state_strings(
     }
 }
 
-fn validate_string(
-    field: &'static str,
-    value: &str,
-) -> Result<(), CheckpointValidationError> {
+fn validate_string(field: &'static str, value: &str) -> Result<(), CheckpointValidationError> {
     if value.is_empty() {
         return Err(CheckpointValidationError::EmptyString { field });
     }
@@ -356,10 +352,7 @@ fn validate_bounded_string(
     Ok(())
 }
 
-fn validate_path(
-    field: &'static str,
-    path: &Path,
-) -> Result<(), CheckpointValidationError> {
+fn validate_path(field: &'static str, path: &Path) -> Result<(), CheckpointValidationError> {
     if !path.is_absolute() {
         return Err(CheckpointValidationError::PathNotAbsolute { field });
     }

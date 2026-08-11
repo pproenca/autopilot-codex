@@ -58,9 +58,7 @@ impl CampaignCompaction {
             return Err(error);
         }
         if !std::mem::take(&mut self.applied) {
-            return Err(
-                "context compaction completed without replacement history".to_string(),
-            );
+            return Err("context compaction completed without replacement history".to_string());
         }
         Ok(Some(reason))
     }

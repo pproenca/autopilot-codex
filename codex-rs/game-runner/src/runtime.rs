@@ -4,9 +4,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_api::AuthManager;
+use codex_core_api::ClientMcpExtensions;
 use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::CodexThread;
-use codex_core_api::ClientMcpExtensions;
 use codex_core_api::Config;
 use codex_core_api::DynamicToolSpec;
 use codex_core_api::EnvironmentManager;
@@ -106,14 +106,7 @@ impl RunnerRuntime {
         rollout_path: PathBuf,
         expected_thread_id: ThreadId,
     ) -> Result<Self, RunnerError> {
-        Self::resume_inner(
-            config,
-            policy,
-            rollout_path,
-            expected_thread_id,
-            None,
-        )
-        .await
+        Self::resume_inner(config, policy, rollout_path, expected_thread_id, None).await
     }
 
     pub async fn resume_with_code_mode_host(

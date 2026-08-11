@@ -69,7 +69,11 @@ impl RecordingFs {
     }
 
     fn operations(&self) -> Vec<FsOperation> {
-        self.state.lock().expect("recording state").operations.clone()
+        self.state
+            .lock()
+            .expect("recording state")
+            .operations
+            .clone()
     }
 
     fn checkpoint_bytes(&self) -> Option<Vec<u8>> {

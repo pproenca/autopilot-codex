@@ -176,9 +176,7 @@ impl DurableCheckpointFs for LocalCheckpointFs {
 }
 
 impl CampaignCheckpointStore {
-    pub fn open(
-        codex_home: &Path,
-    ) -> Result<(Self, CampaignStoreGuard), CheckpointStoreError> {
+    pub fn open(codex_home: &Path) -> Result<(Self, CampaignStoreGuard), CheckpointStoreError> {
         let filesystem: Arc<dyn DurableCheckpointFs> = Arc::new(LocalCheckpointFs);
         let root = codex_home.join(STORE_DIRECTORY);
         filesystem
@@ -219,10 +217,9 @@ impl CampaignCheckpointStore {
         self.filesystem
             .reject_symlink(path)
             .map_err(|source| io_error("inspect", path, source))?;
-        let temporary_path = self.root.join(format!(
-            ".{CHECKPOINT_FILE}.{}.tmp",
-            uuid::Uuid::new_v4()
-        ));
+        let temporary_path = self
+            .root
+            .join(format!(".{CHECKPOINT_FILE}.{}.tmp", uuid::Uuid::new_v4()));
         self.filesystem
             .reject_symlink(&temporary_path)
             .map_err(|source| io_error("inspect temporary file", &temporary_path, source))?;
@@ -245,13 +242,13 @@ impl CampaignCheckpointStore {
             let _ = self.filesystem.remove_file(&temporary_path);
             return Err(io_error("replace", path, source));
         }
-        self.filesystem.sync_directory(&self.root).map_err(|source| {
-            CheckpointStoreError::DurabilityUncertain {
+        self.filesystem
+            .sync_directory(&self.root)
+            .map_err(|source| CheckpointStoreError::DurabilityUncertain {
                 operation: "directory sync",
                 path: self.root.clone(),
                 source,
-            }
-        })?;
+            })?;
         Ok(())
     }
 
@@ -299,13 +296,13 @@ impl CampaignCheckpointStore {
             .remove_file(self.path())
             .map_err(|source| io_error("remove", self.path(), source))?;
         if removed {
-            self.filesystem.sync_directory(&self.root).map_err(|source| {
-                CheckpointStoreError::DurabilityUncertain {
+            self.filesystem
+                .sync_directory(&self.root)
+                .map_err(|source| CheckpointStoreError::DurabilityUncertain {
                     operation: "removal directory sync",
                     path: self.root.clone(),
                     source,
-                }
-            })?;
+                })?;
         }
         Ok(())
     }
@@ -330,11 +327,7 @@ fn create_store_directory(root: &Path) -> Result<(), CheckpointStoreError> {
     }
 }
 
-fn io_error(
-    operation: &'static str,
-    path: &Path,
-    source: io::Error,
-) -> CheckpointStoreError {
+fn io_error(operation: &'static str, path: &Path, source: io::Error) -> CheckpointStoreError {
     CheckpointStoreError::Io {
         operation,
         path: path.to_path_buf(),

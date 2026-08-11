@@ -30,9 +30,10 @@ pub(super) async fn prepare_dynamic_tool_response(
     let accepted_outcome = response.success && request.tool == "report_outcome";
     if accepted_plan {
         let snapshot = gate.snapshot();
-        let plan = snapshot.plan.as_ref().ok_or_else(|| {
-            dynamic_tool_error("accepted plan response did not retain its plan")
-        })?;
+        let plan = snapshot
+            .plan
+            .as_ref()
+            .ok_or_else(|| dynamic_tool_error("accepted plan response did not retain its plan"))?;
         context
             .record_plan(&progress.summary(), plan, gate, policy)
             .await?;
@@ -42,8 +43,7 @@ pub(super) async fn prepare_dynamic_tool_response(
         let outcome = snapshot.outcome.ok_or_else(|| {
             dynamic_tool_error("accepted outcome response did not retain evidence")
         })?;
-        let directive = reduce_accepted_outcome(progress, &outcome)
-            .map_err(dynamic_tool_error)?;
+        let directive = reduce_accepted_outcome(progress, &outcome).map_err(dynamic_tool_error)?;
         context
             .record_outcome(&progress.summary(), &outcome, &directive, gate, policy)
             .await?;

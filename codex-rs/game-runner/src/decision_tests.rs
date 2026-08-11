@@ -230,9 +230,7 @@ fn restored_gate_keeps_audits_but_discards_all_authority() -> anyhow::Result<()>
         mutation_denials: 2,
     };
     let gate = DecisionGate::restore(
-        /*owner_generation*/ 2,
-        /*next_observation_generation*/ 9,
-        audit,
+        /*owner_generation*/ 2, /*next_observation_generation*/ 9, audit,
     )?;
 
     assert_eq!(

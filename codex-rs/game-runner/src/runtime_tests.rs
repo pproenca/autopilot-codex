@@ -48,12 +48,8 @@ async fn native_resume_keeps_thread_identity_and_dynamic_campaign_tools() -> any
         1,
         Arc::new(DecisionGate::new(1)),
     ));
-    let runtime = RunnerRuntime::start(
-        config.clone(),
-        first_policy,
-        CampaignTools::specs(),
-    )
-    .await?;
+    let runtime =
+        RunnerRuntime::start(config.clone(), first_policy, CampaignTools::specs()).await?;
     let thread_id = runtime.thread_id;
     submit_text(&runtime, "materialize this campaign rollout").await?;
     let rollout_path = runtime
@@ -62,7 +58,10 @@ async fn native_resume_keeps_thread_identity_and_dynamic_campaign_tools() -> any
         .clone()
         .expect("persistent runner rollout");
     runtime.thread.flush_rollout().await?;
-    assert_eq!(runtime.shutdown(ShutdownMode::Completed).await, Vec::<String>::new());
+    assert_eq!(
+        runtime.shutdown(ShutdownMode::Completed).await,
+        Vec::<String>::new()
+    );
 
     let resumed_policy = Arc::new(GameCallPolicy::new(
         "11111111-1111-4111-8111-111111111111".to_string(),
@@ -72,7 +71,10 @@ async fn native_resume_keeps_thread_identity_and_dynamic_campaign_tools() -> any
     let resumed = RunnerRuntime::resume(config, resumed_policy, rollout_path, thread_id).await?;
     assert_eq!(resumed.thread_id, thread_id);
     submit_text(&resumed, "continue the same campaign").await?;
-    assert_eq!(resumed.shutdown(ShutdownMode::Completed).await, Vec::<String>::new());
+    assert_eq!(
+        resumed.shutdown(ShutdownMode::Completed).await,
+        Vec::<String>::new()
+    );
 
     let requests = response.requests();
     assert_eq!(requests.len(), 2);

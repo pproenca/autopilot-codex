@@ -200,14 +200,8 @@ async fn serve(
             match expected {
                 ExpectedCall::Capture { jpeg, .. } => {
                     capture_number += 1;
-                    respond_capture(
-                        &mut writer,
-                        &request,
-                        &spool_root,
-                        capture_number,
-                        &jpeg,
-                    )
-                    .await?;
+                    respond_capture(&mut writer, &request, &spool_root, capture_number, &jpeg)
+                        .await?;
                 }
                 ExpectedCall::Mutation { .. } => {
                     respond(
@@ -294,7 +288,11 @@ fn validate_call(
             arguments,
             action_sha256,
             ..
-        } => (tool.as_str(), arguments.clone(), Some(action_sha256.as_str())),
+        } => (
+            tool.as_str(),
+            arguments.clone(),
+            Some(action_sha256.as_str()),
+        ),
     };
     assert_eq!(request["params"]["name"], expected_tool);
     assert_eq!(request["params"]["arguments"], expected_arguments);
@@ -363,7 +361,10 @@ fn tool_specs() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}},
             "annotations": {"readOnlyHint": true},
         }),
-        mutation_spec("click", json!({"x": {"type": "integer"}, "y": {"type": "integer"}})),
+        mutation_spec(
+            "click",
+            json!({"x": {"type": "integer"}, "y": {"type": "integer"}}),
+        ),
         mutation_spec(
             "drag",
             json!({

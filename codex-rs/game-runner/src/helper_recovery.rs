@@ -12,10 +12,8 @@ use crate::RunnerError;
 /// startup future represents one complete recovery cycle and may be retried only
 /// by `HelperRecovery` according to its configured budget.
 pub trait HelperReadiness: Send + Sync {
-    fn socket_is_ready(
-        &self,
-        socket_path: &Path,
-    ) -> impl std::future::Future<Output = bool> + Send;
+    fn socket_is_ready(&self, socket_path: &Path)
+    -> impl std::future::Future<Output = bool> + Send;
 
     fn ensure_serving(
         &self,

@@ -14,13 +14,13 @@ use super::SafeBoundary;
 use super::SafeBoundaryDirective;
 use super::WorkerCommand;
 use super::campaign_compaction::CampaignCompaction;
+use super::campaign_dynamic_tool::prepare_dynamic_tool_response;
 use super::campaign_event::begin_safe_interrupt;
 use super::campaign_event::block_exit as block_report;
 use super::campaign_event::build_exit as build_report;
 use super::campaign_event::initialize_campaign_start;
 use super::campaign_event::reduce_turn_aborted;
 use super::campaign_event::reduce_turn_complete;
-use super::campaign_dynamic_tool::prepare_dynamic_tool_response;
 use super::campaign_game_call::GameCallEndDirective;
 use super::campaign_game_call::finish_game_call_event;
 use super::campaign_submit::campaign_submit_error;
@@ -54,8 +54,9 @@ impl CampaignRun {
 
         loop {
             let progress_deadline = tokio::time::Instant::from_std(progress.next_deadline());
-            let deadline = worker_exit_deadline
-                .map_or(progress_deadline, |deadline| deadline.min(progress_deadline));
+            let deadline = worker_exit_deadline.map_or(progress_deadline, |deadline| {
+                deadline.min(progress_deadline)
+            });
             let event_result = tokio::select! {
                 event = thread.next_event() => Some(event),
                 _ = tokio::time::sleep_until(deadline) => None,
@@ -185,8 +186,7 @@ impl CampaignRun {
                             .as_ref()
                             .map(|mutation| &mutation.authorization)
                             .filter(|authorization| authorization.call_id == event.call_id)
-                            && let Err(error) =
-                                context.record_mutation(authorization, policy).await
+                            && let Err(error) = context.record_mutation(authorization, policy).await
                         {
                             return block_report(
                                 session,
@@ -315,9 +315,8 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::TurnComplete(event) => {
-                    match compaction.finish(
-                        event.error.as_ref().map(|error| error.message.clone()),
-                    ) {
+                    match compaction.finish(event.error.as_ref().map(|error| error.message.clone()))
+                    {
                         Ok(Some(reason)) => {
                             context.record_context_compacted();
                             submit_continuation(thread, &gate, &progress, reason).await?;

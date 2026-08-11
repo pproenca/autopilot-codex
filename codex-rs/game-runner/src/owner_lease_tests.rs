@@ -10,7 +10,11 @@ fn generation_increment_replaces_the_complete_lease() -> anyhow::Result<()> {
     let lease = OwnerLeaseState::new("epoch-1".to_string(), 1);
 
     assert_eq!(
-        (lease.current(), lease.increment_generation()?, lease.current()),
+        (
+            lease.current(),
+            lease.increment_generation()?,
+            lease.current()
+        ),
         (
             OwnerLease {
                 epoch: "epoch-1".to_string(),

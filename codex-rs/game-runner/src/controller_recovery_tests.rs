@@ -43,8 +43,7 @@ async fn healthy_socket_continues_and_unavailable_socket_pauses_for_recovery() {
         (true, WorkerDirective::Continue),
         (false, WorkerDirective::PauseForRecovery),
     ] {
-        let recovery =
-            HelperRecovery::new(SocketReadiness(ready), RecoveryLimits::stage_4b2());
+        let recovery = HelperRecovery::new(SocketReadiness(ready), RecoveryLimits::stage_4b2());
         assert_eq!(
             classify_game_tool_failure(&recovery, Path::new("/tmp/game.sock")).await,
             expected
@@ -89,6 +88,9 @@ async fn exhausted_recovery_pauses_without_changing_losses_or_generation() -> an
             reason: reason.clone(),
         }
     );
-    assert_eq!(status_rx.borrow().clone(), CampaignStatus::Paused { reason });
+    assert_eq!(
+        status_rx.borrow().clone(),
+        CampaignStatus::Paused { reason }
+    );
     Ok(())
 }
