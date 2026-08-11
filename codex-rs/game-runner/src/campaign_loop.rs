@@ -5,16 +5,14 @@ use codex_core_api::CodexThread;
 use codex_core_api::EventMsg;
 use codex_core_api::Op;
 use codex_core_api::SessionConfiguredEvent;
-use codex_core_api::UserInput;
 
 use super::CampaignDirective;
 use super::CampaignExecutionContext;
 use super::CampaignExit;
-use super::CampaignProgress;
 use super::CampaignRun;
-use super::CampaignStart;
 use super::CampaignTerminalState;
-use super::ContinuationReason;
+use super::SafeBoundary;
+use super::SafeBoundaryDirective;
 use super::campaign_event::begin_safe_interrupt;
 use super::campaign_event::block_exit as block_report;
 use super::campaign_event::build_exit as build_report;
@@ -23,62 +21,74 @@ use super::campaign_event::observe_game_call_end;
 use super::campaign_event::reduce_accepted_outcome;
 use super::campaign_event::reduce_turn_aborted;
 use super::campaign_event::reduce_turn_complete;
-use crate::CampaignReport;
+use super::campaign_submit::campaign_submit_error;
+use super::campaign_submit::submit_continuation;
+use super::campaign_submit::submit_turn;
+use super::campaign_submit::submit_worker_interrupt;
+use super::campaign_submit::worker_command_exit;
 use crate::CampaignTools;
 use crate::DecisionGate;
 use crate::GAME_SERVER_NAME;
 use crate::GameCallPolicy;
 use crate::InvalidationReason;
 use crate::RunnerError;
-use crate::campaign_prompt::continuation_prompt;
-use crate::campaign_prompt::new_attempt_prompt;
 
 impl CampaignRun {
-    pub async fn execute(
-        &self,
-        thread: &CodexThread,
-        session: &SessionConfiguredEvent,
-        policy: &GameCallPolicy,
-        gate: Arc<DecisionGate>,
-        target_app: &str,
-    ) -> Result<CampaignReport, RunnerError> {
-        match self
-            .execute_controlled(
-                thread,
-                session,
-                policy,
-                gate,
-                CampaignExecutionContext::Ephemeral {
-                    start: CampaignStart::Fresh {
-                        target_app: target_app.to_string(),
-                    },
-                },
-            )
-            .await?
-        {
-            CampaignExit::VerifiedWin(report) | CampaignExit::Blocked(report) => Ok(report),
-            CampaignExit::Paused => Err(campaign_submit_error("campaign paused")),
-            CampaignExit::Stopped => Err(campaign_submit_error("campaign stopped")),
-        }
-    }
-
     pub(crate) async fn execute_controlled(
         &self,
         thread: &CodexThread,
         session: &SessionConfiguredEvent,
         policy: &GameCallPolicy,
         gate: Arc<DecisionGate>,
-        context: CampaignExecutionContext,
+        mut context: CampaignExecutionContext,
     ) -> Result<CampaignExit, RunnerError> {
         let (mut progress, prompt) = initialize_campaign_start(context.start(), self.limits)?;
         submit_turn(thread, &gate, &prompt).await?;
         let tools = CampaignTools::new(Arc::clone(&gate));
+        let mut safe_boundary = SafeBoundary::default();
 
         loop {
             let deadline = tokio::time::Instant::from_std(progress.next_deadline());
-            let event = match tokio::time::timeout_at(deadline, thread.next_event()).await {
-                Ok(Ok(event)) => event,
-                Ok(Err(error)) => {
+            let event_result = tokio::select! {
+                event = thread.next_event() => Some(event),
+                _ = tokio::time::sleep_until(deadline) => None,
+                command = context.next_worker_command(), if context.has_worker_commands() => {
+                    let Some(command) = command else {
+                        continue;
+                    };
+                    policy.close_mutation_lane();
+                    match safe_boundary.request(command) {
+                        Ok(SafeBoundaryDirective::Interrupt) => {
+                            if let Err(error) = submit_worker_interrupt(thread).await {
+                                return block_report(
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
+                                );
+                            }
+                        }
+                        Ok(
+                            SafeBoundaryDirective::None
+                            | SafeBoundaryDirective::WaitForActiveCall,
+                        ) => {}
+                        Err(error) => {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
+                            );
+                        }
+                    }
+                    continue;
+                }
+            };
+            let event = match event_result {
+                Some(Ok(event)) => event,
+                Some(Err(error)) => {
                     return block_report(
                         session,
                         &progress,
@@ -87,7 +97,7 @@ impl CampaignRun {
                         format!("failed to read campaign event: {error}"),
                     );
                 }
-                Err(_) => {
+                None => {
                     let directive = progress.deadline_directive(&gate.snapshot(), Instant::now());
                     match directive {
                         Some(CampaignDirective::InterruptThenContinue(reason)) => {
@@ -137,21 +147,32 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::McpToolCallBegin(event)
-                    if event.invocation.server == GAME_SERVER_NAME
-                        && matches!(
-                            event.invocation.tool.as_str(),
-                            "click" | "drag" | "focus_click"
-                        ) =>
+                    if event.invocation.server == GAME_SERVER_NAME =>
                 {
-                    let snapshot = gate.snapshot();
-                    if let Some(authorization) = snapshot
-                        .mutation
-                        .as_ref()
-                        .map(|mutation| &mutation.authorization)
-                        .filter(|authorization| authorization.call_id == event.call_id)
-                        && let Err(error) = context.record_mutation(authorization, policy).await
-                    {
+                    if let Err(error) = safe_boundary.begin_game_call(event.call_id.clone()) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
+                    }
+                    if matches!(
+                        event.invocation.tool.as_str(),
+                        "click" | "drag" | "focus_click"
+                    ) {
+                        let snapshot = gate.snapshot();
+                        if let Some(authorization) = snapshot
+                            .mutation
+                            .as_ref()
+                            .map(|mutation| &mutation.authorization)
+                            .filter(|authorization| authorization.call_id == event.call_id)
+                            && let Err(error) =
+                                context.record_mutation(authorization, policy).await
+                        {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
+                            );
+                        }
                     }
                 }
                 EventMsg::McpToolCallEnd(event) => {
@@ -195,6 +216,32 @@ impl CampaignRun {
                     }
                     if let Err(error) = progress.observe_snapshot(&snapshot, Instant::now()) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
+                    }
+                    match safe_boundary.finish_game_call(&event.call_id) {
+                        Ok(SafeBoundaryDirective::Interrupt) => {
+                            if let Err(error) = submit_worker_interrupt(thread).await {
+                                return block_report(
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
+                                );
+                            }
+                        }
+                        Ok(
+                            SafeBoundaryDirective::None
+                            | SafeBoundaryDirective::WaitForActiveCall,
+                        ) => {}
+                        Err(error) => {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
+                            );
+                        }
                     }
                 }
                 EventMsg::DynamicToolCallRequest(request) => {
@@ -331,6 +378,10 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::TurnComplete(event) => {
+                    if let Some(command) = safe_boundary.finish_turn() {
+                        gate.invalidate(InvalidationReason::TurnAborted);
+                        return Ok(worker_command_exit(command));
+                    }
                     if let Some(error) = event.error {
                         return block_report(session, &progress, policy, &gate, error.message);
                     }
@@ -379,6 +430,9 @@ impl CampaignRun {
                 }
                 EventMsg::TurnAborted(event) => {
                     gate.invalidate(InvalidationReason::TurnAborted);
+                    if let Some(command) = safe_boundary.finish_turn() {
+                        return Ok(worker_command_exit(command));
+                    }
                     let directive = match reduce_turn_aborted(&mut progress) {
                         Ok(directive) => directive,
                         Err(error) => {
@@ -431,54 +485,6 @@ impl CampaignRun {
                 _ => {}
             }
         }
-    }
-}
-
-async fn submit_prompt(thread: &CodexThread, prompt: &str) -> Result<(), RunnerError> {
-    thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt.to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
-        .await
-        .map(|_| ())
-        .map_err(campaign_submit_error)
-}
-
-async fn submit_turn(
-    thread: &CodexThread,
-    gate: &DecisionGate,
-    prompt: &str,
-) -> Result<(), RunnerError> {
-    gate.begin_turn();
-    submit_prompt(thread, prompt).await
-}
-
-async fn submit_continuation(
-    thread: &CodexThread,
-    gate: &DecisionGate,
-    progress: &CampaignProgress,
-    reason: ContinuationReason,
-) -> Result<(), RunnerError> {
-    let attempt_number = progress.summary().attempt_number;
-    let prompt = match reason {
-        ContinuationReason::Ordinary | ContinuationReason::TurnTimeout => {
-            continuation_prompt(attempt_number)
-        }
-        ContinuationReason::NewAttempt => new_attempt_prompt(attempt_number),
-    };
-    submit_turn(thread, gate, &prompt).await
-}
-
-fn campaign_submit_error(error: impl std::fmt::Display) -> RunnerError {
-    RunnerError::CampaignFailed {
-        message: error.to_string(),
     }
 }
 

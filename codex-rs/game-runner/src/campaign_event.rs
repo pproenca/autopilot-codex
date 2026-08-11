@@ -12,6 +12,7 @@ use super::CampaignProgress;
 use super::CampaignStart;
 use super::CampaignTerminalState;
 use super::ContinuationReason;
+use super::WorkerCommand;
 use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
 use crate::CampaignEvent;
@@ -37,6 +38,30 @@ impl CampaignExecutionContext {
         }
     }
 
+    pub(super) fn has_worker_commands(&self) -> bool {
+        matches!(
+            self,
+            Self::Durable {
+                commands: Some(_),
+                ..
+            }
+        )
+    }
+
+    pub(super) async fn next_worker_command(&mut self) -> Option<WorkerCommand> {
+        let Self::Durable { commands, .. } = self else {
+            return std::future::pending().await;
+        };
+        let command = match commands {
+            Some(commands) => commands.recv().await,
+            None => return std::future::pending().await,
+        };
+        if command.is_none() {
+            *commands = None;
+        }
+        command
+    }
+
     pub(super) async fn record_progress(
         &self,
         summary: &CampaignSummary,
@@ -46,6 +71,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {
@@ -66,6 +92,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {
@@ -84,6 +111,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {
@@ -120,6 +148,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {
@@ -141,6 +170,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {
@@ -165,6 +195,7 @@ impl CampaignExecutionContext {
         let Self::Durable {
             persistence,
             events,
+            commands: _,
             start: _,
         } = self
         else {

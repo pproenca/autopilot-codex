@@ -6,13 +6,15 @@ use serde_json::json;
 use tokio::sync::broadcast::error::TryRecvError;
 
 use super::CampaignExecutionContext;
-use super::CampaignStart;
+use super::SafeBoundary;
+use super::SafeBoundaryDirective;
 use super::initialize_campaign_start;
 use crate::AcceptedPlan;
 use crate::CampaignEvent;
 use crate::CampaignLimits;
 use crate::CampaignPersistence;
 use crate::CampaignSummary;
+use crate::CampaignStart;
 use crate::CampaignTerminalState;
 use crate::ClickArguments;
 use crate::DecisionGate;
@@ -25,7 +27,9 @@ use crate::PlanDraft;
 use crate::PlannedAction;
 use crate::ReportedOutcome;
 use crate::StrategyRecord;
+use crate::WorkerCommand;
 use crate::campaign::CampaignDirective;
+use crate::campaign::ContinuationReason;
 use crate::campaign_persistence::tests::checkpoint;
 use crate::campaign_persistence::tests::store;
 use crate::campaign_prompt::initial_prompt;
@@ -36,6 +40,39 @@ use crate::campaign_prompt::ResumePromptContext;
 enum DurableOperation {
     Persist,
     Publish(CampaignEvent),
+}
+
+#[test]
+fn pause_and_stop_wait_for_the_exact_active_game_call_boundary() -> anyhow::Result<()> {
+    for (tool, command) in [
+        ("get_app_state", WorkerCommand::Pause),
+        ("click", WorkerCommand::Stop),
+        ("drag", WorkerCommand::Pause),
+    ] {
+        let mut boundary = SafeBoundary::default();
+        boundary.begin_game_call(format!("{tool}-active"))?;
+        assert_eq!(
+            boundary.request(command),
+            Ok(SafeBoundaryDirective::WaitForActiveCall)
+        );
+        assert_eq!(
+            boundary.finish_game_call("unrelated-call"),
+            Ok(SafeBoundaryDirective::None)
+        );
+        assert_eq!(
+            boundary.finish_game_call(&format!("{tool}-active")),
+            Ok(SafeBoundaryDirective::Interrupt)
+        );
+        assert_eq!(boundary.finish_turn(), Some(command));
+    }
+
+    let mut boundary = SafeBoundary::default();
+    assert_eq!(
+        boundary.request(WorkerCommand::Stop),
+        Ok(SafeBoundaryDirective::Interrupt)
+    );
+    assert_eq!(boundary.finish_turn(), Some(WorkerCommand::Stop));
+    Ok(())
 }
 
 #[test]
@@ -87,6 +124,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
     let context = CampaignExecutionContext::Durable {
         persistence: Arc::clone(&persistence),
         events,
+        commands: None,
         start: CampaignStart::Resumed {
             checkpoint: initial,
         },
@@ -193,7 +231,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .record_outcome(
             &loss_summary,
             &loss,
-            &CampaignDirective::InterruptThenContinue(super::ContinuationReason::NewAttempt),
+            &CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt),
             gate.as_ref(),
             &policy,
         )
