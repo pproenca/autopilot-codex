@@ -6,6 +6,7 @@ use codex_core_api::McpToolCallPolicyContributor;
 use codex_core_api::McpToolCallPolicyDecision;
 use codex_core_api::McpToolCallPolicyFuture;
 use codex_core_api::McpToolCallPolicyInput;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
@@ -26,7 +27,8 @@ pub struct OwnerLease {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyAudit {
     pub mutation_attempts: u64,
     pub unknown_tool_attempts: u64,

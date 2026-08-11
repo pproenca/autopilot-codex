@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::CampaignTerminalState;
@@ -29,7 +30,8 @@ impl CampaignLimits {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CampaignSummary {
     pub attempt_number: u64,
     pub total_turns: u64,

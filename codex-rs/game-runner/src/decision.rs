@@ -116,7 +116,8 @@ pub struct MutationEvidence {
     pub result: Option<MutationResult>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DecisionAudit {
     pub plans_accepted: u64,
     pub plan_rejections: u64,
