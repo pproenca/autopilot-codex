@@ -85,6 +85,7 @@ pub(super) async fn start_fresh_campaign(
                     persistence: worker_persistence,
                     events,
                     commands: Some(command_rx),
+                    failures: None,
                     start: CampaignStart::Fresh { target_app },
                 },
             )
@@ -197,6 +198,7 @@ pub(super) async fn resume_campaign(
                     persistence: worker_persistence,
                     events,
                     commands: Some(command_rx),
+                    failures: None,
                     start: worker_start,
                 },
             )
@@ -308,6 +310,11 @@ pub(super) async fn finish_worker(
                 events_tx,
             )?;
             let _ = report_tx.send(Err(ControllerError::CampaignStopped)).await;
+        }
+        CampaignExit::RecoveryRequired => {
+            return Err(ControllerError::Runner(RunnerError::CampaignFailed {
+                message: "helper recovery exit reached the normal worker finisher".to_string(),
+            }));
         }
         CampaignExit::Blocked(report) => {
             shutdown_runtime(completion.runtime, ShutdownMode::Interrupt).await?;

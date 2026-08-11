@@ -44,6 +44,7 @@ pub(crate) enum CampaignExecutionContext {
         persistence: Arc<CampaignPersistence>,
         events: tokio::sync::broadcast::Sender<CampaignEvent>,
         commands: Option<tokio::sync::mpsc::Receiver<WorkerCommand>>,
+        failures: Option<tokio::sync::mpsc::Sender<crate::GameToolFailureSignal>>,
         start: CampaignStart,
     },
 }
@@ -52,6 +53,7 @@ pub(crate) enum CampaignExit {
     VerifiedWin(CampaignReport),
     Paused,
     Stopped,
+    RecoveryRequired,
     Blocked(CampaignReport),
 }
 
@@ -144,6 +146,12 @@ impl CampaignRun {
 
 #[path = "campaign_loop.rs"]
 mod campaign_loop;
+
+#[path = "campaign_coordination.rs"]
+mod campaign_coordination;
+
+#[path = "campaign_game_call.rs"]
+mod campaign_game_call;
 
 #[path = "campaign_submit.rs"]
 mod campaign_submit;

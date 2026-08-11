@@ -1,6 +1,9 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
+use codex_core_api::McpInvocation;
+use codex_core_api::McpToolCallEndEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -28,6 +31,7 @@ use crate::PlannedAction;
 use crate::ReportedOutcome;
 use crate::StrategyRecord;
 use crate::WorkerCommand;
+use crate::WorkerDirective;
 use crate::campaign::CampaignDirective;
 use crate::campaign::ContinuationReason;
 use crate::campaign_persistence::tests::checkpoint;
@@ -72,6 +76,48 @@ fn pause_and_stop_wait_for_the_exact_active_game_call_boundary() -> anyhow::Resu
         Ok(SafeBoundaryDirective::Interrupt)
     );
     assert_eq!(boundary.finish_turn(), Some(WorkerCommand::Stop));
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_game_tool_waits_for_the_controller_directive() -> anyhow::Result<()> {
+    let (_codex_home, store, _guard) = store()?;
+    let (events, _) = tokio::sync::broadcast::channel(1);
+    let (failure_tx, mut failure_rx) = tokio::sync::mpsc::channel(1);
+    let context = CampaignExecutionContext::Durable {
+        persistence: Arc::new(CampaignPersistence::empty(store)),
+        events,
+        commands: None,
+        failures: Some(failure_tx),
+        start: CampaignStart::Fresh {
+            target_app: "Difficult Game".to_string(),
+        },
+    };
+    let controller = tokio::spawn(async move {
+        for directive in [
+            WorkerDirective::Continue,
+            WorkerDirective::PauseForRecovery,
+        ] {
+            let signal = failure_rx.recv().await.expect("failure signal");
+            assert_eq!(signal.tool, "click");
+            assert_eq!(signal.summary, "socket disconnected");
+            signal
+                .response
+                .send(directive)
+                .expect("worker should await the directive");
+        }
+    });
+    let failure = failed_tool_end();
+
+    assert_eq!(
+        context.game_tool_failure_directive(&failure).await?,
+        Some(WorkerDirective::Continue)
+    );
+    assert_eq!(
+        context.game_tool_failure_directive(&failure).await?,
+        Some(WorkerDirective::PauseForRecovery)
+    );
+    controller.await?;
     Ok(())
 }
 
@@ -125,6 +171,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         persistence: Arc::clone(&persistence),
         events,
         commands: None,
+        failures: None,
         start: CampaignStart::Resumed {
             checkpoint: initial,
         },
@@ -287,6 +334,26 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         ]
     );
     Ok(())
+}
+
+fn failed_tool_end() -> McpToolCallEndEvent {
+    McpToolCallEndEvent {
+        call_id: "mutation-1".to_string(),
+        invocation: McpInvocation {
+            server: "game".to_string(),
+            tool: "click".to_string(),
+            arguments: None,
+        },
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        link_id: None,
+        app_name: None,
+        action_name: None,
+        plugin_id: None,
+        read_only_hint: None,
+        duration: Duration::ZERO,
+        result: Err("socket disconnected".to_string()),
+    }
 }
 
 fn accepted_plan(gate: &DecisionGate) -> anyhow::Result<AcceptedPlan> {

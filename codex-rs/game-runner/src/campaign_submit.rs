@@ -45,6 +45,9 @@ impl CampaignRun {
             CampaignExit::VerifiedWin(report) | CampaignExit::Blocked(report) => Ok(report),
             CampaignExit::Paused => Err(campaign_submit_error("campaign paused")),
             CampaignExit::Stopped => Err(campaign_submit_error("campaign stopped")),
+            CampaignExit::RecoveryRequired => {
+                Err(campaign_submit_error("campaign helper recovery required"))
+            }
         }
     }
 }

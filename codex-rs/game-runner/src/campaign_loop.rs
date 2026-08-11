@@ -17,10 +17,11 @@ use super::campaign_event::begin_safe_interrupt;
 use super::campaign_event::block_exit as block_report;
 use super::campaign_event::build_exit as build_report;
 use super::campaign_event::initialize_campaign_start;
-use super::campaign_event::observe_game_call_end;
 use super::campaign_event::reduce_accepted_outcome;
 use super::campaign_event::reduce_turn_aborted;
 use super::campaign_event::reduce_turn_complete;
+use super::campaign_game_call::GameCallEndDirective;
+use super::campaign_game_call::finish_game_call_event;
 use super::campaign_submit::campaign_submit_error;
 use super::campaign_submit::submit_continuation;
 use super::campaign_submit::submit_turn;
@@ -46,9 +47,13 @@ impl CampaignRun {
         submit_turn(thread, &gate, &prompt).await?;
         let tools = CampaignTools::new(Arc::clone(&gate));
         let mut safe_boundary = SafeBoundary::default();
+        let mut recovery_pending = false;
+        let mut worker_exit_deadline: Option<tokio::time::Instant> = None;
 
         loop {
-            let deadline = tokio::time::Instant::from_std(progress.next_deadline());
+            let progress_deadline = tokio::time::Instant::from_std(progress.next_deadline());
+            let deadline = worker_exit_deadline
+                .map_or(progress_deadline, |deadline| deadline.min(progress_deadline));
             let event_result = tokio::select! {
                 event = thread.next_event() => Some(event),
                 _ = tokio::time::sleep_until(deadline) => None,
@@ -68,6 +73,8 @@ impl CampaignRun {
                                     error.to_string(),
                                 );
                             }
+                            worker_exit_deadline =
+                                Some(tokio::time::Instant::now() + self.limits.interrupt_timeout);
                         }
                         Ok(
                             SafeBoundaryDirective::None
@@ -98,6 +105,13 @@ impl CampaignRun {
                     );
                 }
                 None => {
+                    if recovery_pending {
+                        return Ok(CampaignExit::RecoveryRequired);
+                    }
+                    if let Some(command) = safe_boundary.finish_turn() {
+                        gate.invalidate(InvalidationReason::TurnAborted);
+                        return Ok(worker_command_exit(command));
+                    }
                     let directive = progress.deadline_directive(&gate.snapshot(), Instant::now());
                     match directive {
                         Some(CampaignDirective::InterruptThenContinue(reason)) => {
@@ -176,49 +190,17 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::McpToolCallEnd(event) => {
-                    if let Err(error) = observe_game_call_end(&gate, &event) {
-                        return block_report(session, &progress, policy, &gate, error.to_string());
-                    }
-                    let snapshot = gate.snapshot();
-                    let durable_result = if event.invocation.server != GAME_SERVER_NAME {
-                        Ok(())
-                    } else {
-                        match event.invocation.tool.as_str() {
-                            "get_app_state" => match snapshot
-                                .observation
-                                .as_ref()
-                                .filter(|observation| observation.call_id == event.call_id)
-                            {
-                                Some(observation) => {
-                                    context.record_observation(observation, policy).await
-                                }
-                                None => Ok(()),
-                            },
-                            "click" | "drag" | "focus_click" => match snapshot
-                                .mutation
-                                .as_ref()
-                                .filter(|mutation| mutation.authorization.call_id == event.call_id)
-                                .and_then(|mutation| mutation.result)
-                            {
-                                Some(result) => {
-                                    context
-                                        .record_mutation_finished(&event.call_id, result, policy)
-                                        .await
-                                }
-                                None => Ok(()),
-                            },
-                            "wait" | "zoom" => Ok(()),
-                            _ => Ok(()),
-                        }
-                    };
-                    if let Err(error) = durable_result {
-                        return block_report(session, &progress, policy, &gate, error.to_string());
-                    }
-                    if let Err(error) = progress.observe_snapshot(&snapshot, Instant::now()) {
-                        return block_report(session, &progress, policy, &gate, error.to_string());
-                    }
-                    match safe_boundary.finish_game_call(&event.call_id) {
-                        Ok(SafeBoundaryDirective::Interrupt) => {
+                    match finish_game_call_event(
+                        &event,
+                        &context,
+                        &mut progress,
+                        &mut safe_boundary,
+                        policy,
+                        &gate,
+                    )
+                    .await
+                    {
+                        Ok(GameCallEndDirective::InterruptForCommand) => {
                             if let Err(error) = submit_worker_interrupt(thread).await {
                                 return block_report(
                                     session,
@@ -228,11 +210,25 @@ impl CampaignRun {
                                     error.to_string(),
                                 );
                             }
+                            worker_exit_deadline =
+                                Some(tokio::time::Instant::now() + self.limits.interrupt_timeout);
                         }
-                        Ok(
-                            SafeBoundaryDirective::None
-                            | SafeBoundaryDirective::WaitForActiveCall,
-                        ) => {}
+                        Ok(GameCallEndDirective::PauseForRecovery) => {
+                            policy.close_mutation_lane();
+                            if let Err(error) = submit_worker_interrupt(thread).await {
+                                return block_report(
+                                    session,
+                                    &progress,
+                                    policy,
+                                    &gate,
+                                    error.to_string(),
+                                );
+                            }
+                            recovery_pending = true;
+                            worker_exit_deadline =
+                                Some(tokio::time::Instant::now() + self.limits.interrupt_timeout);
+                        }
+                        Ok(GameCallEndDirective::Continue) => {}
                         Err(error) => {
                             return block_report(
                                 session,
@@ -378,6 +374,10 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::TurnComplete(event) => {
+                    if recovery_pending {
+                        gate.invalidate(InvalidationReason::TurnAborted);
+                        return Ok(CampaignExit::RecoveryRequired);
+                    }
                     if let Some(command) = safe_boundary.finish_turn() {
                         gate.invalidate(InvalidationReason::TurnAborted);
                         return Ok(worker_command_exit(command));
@@ -430,6 +430,9 @@ impl CampaignRun {
                 }
                 EventMsg::TurnAborted(event) => {
                     gate.invalidate(InvalidationReason::TurnAborted);
+                    if recovery_pending {
+                        return Ok(CampaignExit::RecoveryRequired);
+                    }
                     if let Some(command) = safe_boundary.finish_turn() {
                         return Ok(worker_command_exit(command));
                     }
