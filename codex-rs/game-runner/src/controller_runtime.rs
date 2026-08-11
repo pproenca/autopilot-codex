@@ -26,10 +26,11 @@ pub(super) async fn start_fresh_campaign(
         Arc::clone(&gate),
         Arc::clone(&persistence),
     ));
-    let runtime = RunnerRuntime::start(
+    let runtime = RunnerRuntime::start_with_code_mode_host(
         runtime_config,
         Arc::clone(&policy),
         CampaignTools::specs(),
+        code_mode_host_program(&config.runner_executable),
     )
     .await?;
     let rollout_path = runtime
@@ -180,11 +181,12 @@ pub(super) async fn resume_ready_campaign(
             message: format!("invalid checkpoint thread id: {error}"),
         }
     })?;
-    let runtime = RunnerRuntime::resume(
+    let runtime = RunnerRuntime::resume_with_code_mode_host(
         runtime_config,
         Arc::clone(&policy),
         checkpoint.rollout_path.clone(),
         expected_thread_id,
+        code_mode_host_program(&config.runner_executable),
     )
     .await?;
     persistence
@@ -233,6 +235,13 @@ pub(super) async fn resume_ready_campaign(
             pending: None,
         },
         installed,
+    ))
+}
+
+fn code_mode_host_program(runner_executable: &std::path::Path) -> std::path::PathBuf {
+    runner_executable.with_file_name(format!(
+        "codex-code-mode-host{}",
+        std::env::consts::EXE_SUFFIX
     ))
 }
 
