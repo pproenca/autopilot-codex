@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -13,11 +14,15 @@ use serde_json::Value;
 
 use crate::DecisionGate;
 use crate::GAME_SERVER_NAME;
+use crate::CampaignPersistence;
+use crate::MutationCheckpointUpdate;
+use crate::OwnerLeaseState;
 
 pub struct GameCallPolicy {
-    epoch: String,
-    generation: u64,
+    lease: Arc<OwnerLeaseState>,
     gate: Arc<DecisionGate>,
+    persistence: Option<Arc<CampaignPersistence>>,
+    mutation_lane_open: AtomicBool,
     unknown_tool_attempts: AtomicU64,
 }
 
@@ -38,18 +43,30 @@ pub struct PolicyAudit {
 impl GameCallPolicy {
     pub fn new(epoch: String, generation: u64, gate: Arc<DecisionGate>) -> Self {
         Self {
-            epoch,
-            generation,
+            lease: Arc::new(OwnerLeaseState::new(epoch, generation)),
             gate,
+            persistence: None,
+            mutation_lane_open: AtomicBool::new(true),
+            unknown_tool_attempts: AtomicU64::new(0),
+        }
+    }
+
+    pub fn durable(
+        lease: Arc<OwnerLeaseState>,
+        gate: Arc<DecisionGate>,
+        persistence: Arc<CampaignPersistence>,
+    ) -> Self {
+        Self {
+            lease,
+            gate,
+            persistence: Some(persistence),
+            mutation_lane_open: AtomicBool::new(true),
             unknown_tool_attempts: AtomicU64::new(0),
         }
     }
 
     pub fn lease(&self) -> OwnerLease {
-        OwnerLease {
-            epoch: self.epoch.clone(),
-            generation: self.generation,
-        }
+        self.lease.current()
     }
 
     pub fn audit(&self) -> PolicyAudit {
@@ -62,11 +79,12 @@ impl GameCallPolicy {
     }
 
     fn allow_with_owner_metadata(&self, call_id: &str) -> McpToolCallPolicyDecision {
+        let lease = self.lease.current();
         let mut additional_request_meta = Map::new();
-        additional_request_meta.insert("epoch".to_string(), Value::String(self.epoch.clone()));
+        additional_request_meta.insert("epoch".to_string(), Value::String(lease.epoch));
         additional_request_meta.insert(
             "generation".to_string(),
-            Value::Number(self.generation.into()),
+            Value::Number(lease.generation.into()),
         );
         additional_request_meta.insert("call_id".to_string(), Value::String(call_id.to_string()));
         McpToolCallPolicyDecision::Allow {
@@ -80,6 +98,14 @@ impl GameCallPolicy {
             Ordering::Relaxed,
             |value| value.checked_add(1),
         );
+    }
+
+    pub fn close_mutation_lane(&self) {
+        self.mutation_lane_open.store(false, Ordering::Release);
+    }
+
+    pub fn mutation_lane_is_open(&self) -> bool {
+        self.mutation_lane_open.load(Ordering::Acquire)
     }
 }
 
@@ -102,12 +128,31 @@ impl McpToolCallPolicyContributor for GameCallPolicy {
                     self.allow_with_owner_metadata(input.call_id)
                 }
                 "click" | "drag" | "focus_click" => {
+                    if !self.mutation_lane_is_open() {
+                        return McpToolCallPolicyDecision::Deny {
+                            reason: "campaign mutation lane is closed".to_string(),
+                        };
+                    }
                     let arguments = input.arguments.unwrap_or(&Value::Null);
                     match self
                         .gate
                         .prepare_mutation(input.tool_name, arguments, input.call_id)
                     {
                         Ok(authorization) => {
+                            if let Some(persistence) = &self.persistence {
+                                let update = MutationCheckpointUpdate {
+                                    authorization: authorization.clone(),
+                                    decision_audit: self.gate.snapshot().audit,
+                                    policy_audit: self.audit(),
+                                };
+                                if persistence.begin_mutation(&update).await.is_err() {
+                                    self.close_mutation_lane();
+                                    return McpToolCallPolicyDecision::Deny {
+                                        reason: "campaign checkpoint write failed before mutation dispatch"
+                                            .to_string(),
+                                    };
+                                }
+                            }
                             let McpToolCallPolicyDecision::Allow {
                                 mut additional_request_meta,
                             } = self.allow_with_owner_metadata(input.call_id)

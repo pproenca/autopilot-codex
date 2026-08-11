@@ -8,15 +8,20 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::ClickArguments;
+use crate::CampaignPersistence;
 use crate::DecisionGate;
 use crate::MAX_ACTIONS_PER_TURN;
 use crate::MutationResult;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
+use crate::OwnerLeaseState;
 
 use super::GameCallPolicy;
 use super::PolicyAudit;
+
+use crate::campaign_persistence::tests::checkpoint;
+use crate::campaign_persistence::tests::store;
 
 fn install_click_plan(gate: &DecisionGate, reference: &str, x: i64) -> anyhow::Result<()> {
     gate.begin_full_observation();
@@ -101,6 +106,63 @@ async fn exact_planned_mutation_receives_owner_and_operation_metadata() -> anyho
             mutation_authorizations: 1,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn durable_policy_persists_pending_before_allowing_dispatch() -> anyhow::Result<()> {
+    let (_codex_home, store, _guard) = store()?;
+    let persistence = Arc::new(CampaignPersistence::empty(store));
+    let checkpoint = checkpoint();
+    persistence.install(checkpoint.clone()).await?;
+    let gate = Arc::new(DecisionGate::new(1));
+    install_click_plan(&gate, "sha256:before", 180)?;
+    let lease = Arc::new(OwnerLeaseState::new(checkpoint.epoch.clone(), 1));
+    let policy = GameCallPolicy::durable(lease, Arc::clone(&gate), Arc::clone(&persistence));
+    let arguments = json!({"x": 180, "y": 640});
+
+    assert!(matches!(
+        evaluate(&policy, "click", "mutation-1", Some(&arguments)).await,
+        McpToolCallPolicyDecision::Allow { .. }
+    ));
+    let persisted = persistence.snapshot().await?;
+    assert_eq!(persisted.summary.total_actions, 1);
+    assert_eq!(
+        persisted
+            .unresolved_mutation
+            .expect("pending mutation")
+            .result,
+        crate::DurableMutationResult::Pending
+    );
+    assert_eq!(policy.mutation_lane_is_open(), true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpoint_failure_denies_dispatch_and_closes_the_mutation_lane() -> anyhow::Result<()> {
+    let (_codex_home, store, _guard) = store()?;
+    let persistence = Arc::new(CampaignPersistence::empty(Arc::clone(&store)));
+    let checkpoint = checkpoint();
+    persistence.install(checkpoint.clone()).await?;
+    std::fs::remove_file(store.path())?;
+    std::fs::create_dir(store.path())?;
+    let gate = Arc::new(DecisionGate::new(1));
+    install_click_plan(&gate, "sha256:before", 180)?;
+    let lease = Arc::new(OwnerLeaseState::new(checkpoint.epoch, 1));
+    let policy = GameCallPolicy::durable(lease, gate, persistence.clone());
+    let arguments = json!({"x": 180, "y": 640});
+
+    assert_eq!(
+        evaluate(&policy, "click", "mutation-1", Some(&arguments)).await,
+        McpToolCallPolicyDecision::Deny {
+            reason: "campaign checkpoint write failed before mutation dispatch".to_string(),
+        }
+    );
+    assert_eq!(
+        persistence.snapshot().await?.unresolved_mutation,
+        None
+    );
+    assert_eq!(policy.mutation_lane_is_open(), false);
     Ok(())
 }
 
