@@ -73,6 +73,8 @@ pub enum RunnerError {
     InvalidModelReport { message: String },
     #[error("non-ephemeral thread did not expose a rollout path")]
     MissingRolloutPath,
+    #[error("campaign at {path} must be resumed explicitly", path = path.display())]
+    CampaignRequiresResume { path: PathBuf },
     #[error("run failed and cleanup also failed: {cleanup}")]
     RunAndCleanupFailed {
         #[source]

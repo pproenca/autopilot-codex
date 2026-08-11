@@ -1,8 +1,6 @@
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -11,20 +9,14 @@ use codex_core_api::Arg0DispatchPaths;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::find_codex_home;
 use codex_core_api::set_default_originator;
+use codex_game_runner::CampaignCommand;
+use codex_game_runner::CampaignController;
 use codex_game_runner::CampaignLimits;
 use codex_game_runner::CampaignReport;
-use codex_game_runner::CampaignRun;
-use codex_game_runner::CampaignTools;
-use codex_game_runner::DecisionGate;
-use codex_game_runner::GENERATION;
-use codex_game_runner::GameCallPolicy;
-use codex_game_runner::HelperLauncher;
-use codex_game_runner::ReadinessLimits;
+use codex_game_runner::ControllerConfig;
+use codex_game_runner::ControllerError;
 use codex_game_runner::RunnerDeployment;
 use codex_game_runner::RunnerError;
-use codex_game_runner::RunnerRuntime;
-use codex_game_runner::ShutdownMode;
-use uuid::Uuid;
 
 const BRIDGE_MODE: &str = "__stdio-to-uds";
 
@@ -97,50 +89,35 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignR
         target_app: args.target_app,
         codex_home: codex_home.to_path_buf(),
     };
-    let config = codex_game_runner::load_runner_config(&deployment, &runner_executable).await?;
-
-    HelperLauncher::new(ReadinessLimits {
-        timeout: Duration::from_secs(15),
-        poll_interval: Duration::from_millis(100),
+    let mut controller = CampaignController::open(ControllerConfig {
+        deployment,
+        runner_executable,
+        limits: CampaignLimits::stage_4b1(),
     })
-    .ensure_serving(&deployment)
-    .await?;
-
-    let gate = Arc::new(DecisionGate::new(GENERATION));
-    let policy = Arc::new(GameCallPolicy::new(
-        Uuid::new_v4().to_string(),
-        GENERATION,
-        Arc::clone(&gate),
-    ));
-    let runtime = RunnerRuntime::start(config, Arc::clone(&policy), CampaignTools::specs()).await?;
-    let campaign = CampaignRun::new(CampaignLimits::stage_4b1())
-        .execute(
-            &runtime.thread,
-            &runtime.session_configured,
-            policy.as_ref(),
-            gate,
-            &deployment.target_app,
-        )
-        .await;
-    let shutdown_mode = if campaign.is_ok() {
-        ShutdownMode::Completed
-    } else {
-        ShutdownMode::Interrupt
-    };
-    let cleanup_errors = runtime.shutdown(shutdown_mode).await;
-
-    match (campaign, cleanup_errors.is_empty()) {
-        (Ok(report), true) => Ok(report),
-        (Ok(_), false) => bail!(
-            "game campaign cleanup failed: {}",
-            cleanup_errors.join("; ")
+    .await
+    .map_err(map_controller_error)?;
+    if let Err(error) = controller.command(CampaignCommand::Start).await {
+        controller.shutdown().await.map_err(map_controller_error)?;
+        return Err(map_controller_error(error));
+    }
+    let report = controller.wait_for_report().await;
+    let cleanup = controller.shutdown().await;
+    match (report, cleanup) {
+        (Ok(report), Ok(())) => Ok(report),
+        (Ok(_), Err(error)) => Err(map_controller_error(error)),
+        (Err(error), Ok(())) => Err(map_controller_error(error)),
+        (Err(primary), Err(cleanup)) => bail!(
+            "game campaign failed: {primary}; controller cleanup failed: {cleanup}"
         ),
-        (Err(primary), true) => Err(primary.into()),
-        (Err(primary), false) => Err(RunnerError::RunAndCleanupFailed {
-            primary: Box::new(primary),
-            cleanup: cleanup_errors.join("; "),
+    }
+}
+
+fn map_controller_error(error: ControllerError) -> anyhow::Error {
+    match error {
+        ControllerError::CampaignRequiresResume { path } => {
+            RunnerError::CampaignRequiresResume { path }.into()
         }
-        .into()),
+        error => error.into(),
     }
 }
 

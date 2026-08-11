@@ -5,10 +5,13 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use codex_game_runner::CampaignReport;
+use codex_game_runner::ControllerError;
+use codex_game_runner::RunnerError;
 use pretty_assertions::assert_eq;
 
 use super::Args;
 use super::dispatch_main;
+use super::map_controller_error;
 use super::run;
 
 #[test]
@@ -67,5 +70,18 @@ fn production_run_returns_a_campaign_report() {
             target_app: "Gambonanza".to_string(),
         },
         PathBuf::from("/bin/codex-game-runner"),
+    ));
+}
+
+#[test]
+fn paused_controller_error_maps_to_runner_resume_requirement() {
+    let path = PathBuf::from("/tmp/codex-home/game-runner/campaign.json");
+    let error = map_controller_error(ControllerError::CampaignRequiresResume {
+        path: path.clone(),
+    });
+
+    assert!(matches!(
+        error.downcast_ref::<RunnerError>(),
+        Some(RunnerError::CampaignRequiresResume { path: actual }) if actual == &path
     ));
 }

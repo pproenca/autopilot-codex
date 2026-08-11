@@ -91,17 +91,25 @@ async fn paused_campaign_requires_resume_but_can_be_stopped_durably() -> anyhow:
     );
     assert!(matches!(
         controller.command(CampaignCommand::Start).await,
-        Err(ControllerError::InvalidCommand(_))
+        Err(ControllerError::CampaignRequiresResume { path }) if path == store.path()
     ));
+    controller.shutdown().await?;
+    assert!(store.path().exists());
+
+    let mut controller =
+        CampaignController::open(config(codex_home.path().to_path_buf())).await?;
     let mut events = controller.subscribe();
     assert_eq!(
         controller.command(CampaignCommand::Stop).await?,
         CampaignStatus::Idle
     );
-    assert_eq!(
-        events.recv().await?,
-        CampaignEvent::StatusChanged(CampaignStatus::Stopping)
-    );
+    loop {
+        if events.recv().await?
+            == CampaignEvent::StatusChanged(CampaignStatus::Stopping)
+        {
+            break;
+        }
+    }
     assert_eq!(
         events.recv().await?,
         CampaignEvent::StatusChanged(CampaignStatus::Idle)

@@ -164,10 +164,7 @@ impl CampaignController {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), ControllerError> {
-        if matches!(
-            self.status(),
-            CampaignStatus::Running { .. } | CampaignStatus::Paused { .. }
-        ) {
+        if matches!(self.status(), CampaignStatus::Running { .. }) {
             self.command(CampaignCommand::Stop).await?;
         }
         let (response, receiver) = tokio::sync::oneshot::channel();
@@ -232,7 +229,17 @@ async fn run_controller_actor(
                 let directive = match reduce_command(&status, command.clone()) {
                     Ok(directive) => directive,
                     Err(error) => {
-                        let _ = response.send(Err(ControllerError::InvalidCommand(error)));
+                        let controller_error = if matches!(
+                            (&status, &command),
+                            (CampaignStatus::Paused { .. }, CampaignCommand::Start)
+                        ) {
+                            ControllerError::CampaignRequiresResume {
+                                path: store.path().to_path_buf(),
+                            }
+                        } else {
+                            ControllerError::InvalidCommand(error)
+                        };
+                        let _ = response.send(Err(controller_error));
                         continue;
                     }
                 };
