@@ -7,7 +7,9 @@ use codex_core_api::WebSearchMode;
 use pretty_assertions::assert_eq;
 
 use super::RunnerDeployment;
+use super::BridgeFocus;
 use super::load_runner_config;
+use super::load_runner_config_for_focus;
 
 #[derive(Debug, PartialEq, Eq)]
 struct ConfigProjection {
@@ -90,6 +92,34 @@ async fn runner_config_is_fixed_to_read_only_sol() -> anyhow::Result<()> {
                 "Gambonanza".to_string(),
             ],
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unmanaged_bridge_omits_the_focus_target() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let deployment = RunnerDeployment {
+        helper_app: temp.path().join("AutoPilotHelper.app"),
+        socket_path: temp.path().join("game.sock"),
+        target_app: "Gambonanza".to_string(),
+        codex_home: temp.path().to_path_buf(),
+    };
+    let runner_executable = temp.path().join("codex-game-runner");
+
+    let config = load_runner_config_for_focus(
+        &deployment,
+        &runner_executable,
+        BridgeFocus::PreserveCurrent,
+    )
+    .await?;
+
+    assert_eq!(
+        project(&config).game_args,
+        vec![
+            "__stdio-to-uds".to_string(),
+            temp.path().join("game.sock").display().to_string(),
+        ]
     );
     Ok(())
 }

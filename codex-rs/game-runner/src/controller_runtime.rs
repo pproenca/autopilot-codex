@@ -11,9 +11,10 @@ pub(super) async fn start_fresh_campaign(
     })
     .ensure_serving(&config.deployment)
     .await?;
-    let runtime_config = crate::load_runner_config(
+    let runtime_config = crate::config::load_runner_config_for_focus(
         &config.deployment,
         &config.runner_executable,
+        config.bridge_focus,
     )
     .await?;
     let epoch = Uuid::new_v4().to_string();
@@ -129,9 +130,10 @@ pub(super) async fn resume_ready_campaign(
     events: tokio::sync::broadcast::Sender<CampaignEvent>,
     checkpoint: CampaignCheckpoint,
 ) -> Result<(ActiveCampaign, CampaignCheckpoint), ControllerError> {
-    let runtime_config = crate::load_runner_config(
+    let runtime_config = crate::config::load_runner_config_for_focus(
         &config.deployment,
         &config.runner_executable,
+        config.bridge_focus,
     )
     .await?;
     let persistence = Arc::new(CampaignPersistence::empty(store));

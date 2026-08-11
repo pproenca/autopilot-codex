@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
+use crate::BridgeFocus;
 use crate::CampaignCheckpoint;
 use crate::CampaignLimits;
 use crate::CampaignExit;
@@ -24,6 +25,7 @@ pub(crate) const REQUEST_CAPACITY: usize = 8;
 pub struct ControllerConfig {
     pub deployment: RunnerDeployment,
     pub runner_executable: PathBuf,
+    pub bridge_focus: BridgeFocus,
     pub limits: CampaignLimits,
 }
 

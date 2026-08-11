@@ -190,6 +190,7 @@ fn config(codex_home: PathBuf) -> ControllerConfig {
             codex_home,
         },
         runner_executable: PathBuf::from("/not-used-before-start"),
+        bridge_focus: crate::BridgeFocus::PreserveCurrent,
         limits: CampaignLimits::stage_4b1(),
     }
 }

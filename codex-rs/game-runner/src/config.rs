@@ -22,6 +22,12 @@ pub const GAME_SERVER_NAME: &str = "game";
 pub const MODEL: &str = "gpt-5.6-sol";
 pub const GENERATION: u64 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeFocus {
+    TargetApplication,
+    PreserveCurrent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerDeployment {
     pub helper_app: PathBuf,
@@ -87,7 +93,20 @@ pub async fn load_runner_config(
     deployment: &RunnerDeployment,
     runner_executable: &Path,
 ) -> Result<Config, RunnerError> {
-    load_runner_config_inner(deployment, runner_executable)
+    load_runner_config_for_focus(
+        deployment,
+        runner_executable,
+        BridgeFocus::TargetApplication,
+    )
+    .await
+}
+
+pub(crate) async fn load_runner_config_for_focus(
+    deployment: &RunnerDeployment,
+    runner_executable: &Path,
+    bridge_focus: BridgeFocus,
+) -> Result<Config, RunnerError> {
+    load_runner_config_inner(deployment, runner_executable, bridge_focus)
         .await
         .map_err(|source| RunnerError::Config { source })
 }
@@ -95,6 +114,7 @@ pub async fn load_runner_config(
 async fn load_runner_config_inner(
     deployment: &RunnerDeployment,
     runner_executable: &Path,
+    bridge_focus: BridgeFocus,
 ) -> anyhow::Result<Config> {
     let mut config = ConfigBuilder::default()
         .codex_home(deployment.codex_home.clone())
@@ -157,13 +177,19 @@ async fn load_runner_config_inner(
     config.code_mode.excluded_tool_namespaces = vec!["functions".to_string()];
     config.code_mode.direct_only_tool_namespaces.clear();
 
+    let mut bridge_args = vec![
+        serde_json::json!("__stdio-to-uds"),
+        serde_json::json!(deployment.socket_path),
+    ];
+    match bridge_focus {
+        BridgeFocus::TargetApplication => {
+            bridge_args.push(serde_json::json!(deployment.target_app));
+        }
+        BridgeFocus::PreserveCurrent => {}
+    }
     let game_server = serde_json::from_value::<McpServerConfig>(serde_json::json!({
         "command": runner_executable,
-        "args": [
-            "__stdio-to-uds",
-            deployment.socket_path,
-            deployment.target_app,
-        ],
+        "args": bridge_args,
         "enabled": true,
         "required": true,
         "supports_parallel_tool_calls": false,

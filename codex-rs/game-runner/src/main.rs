@@ -13,6 +13,7 @@ use codex_game_runner::CampaignCommand;
 use codex_game_runner::CampaignController;
 use codex_game_runner::CampaignLimits;
 use codex_game_runner::CampaignReport;
+use codex_game_runner::BridgeFocus;
 use codex_game_runner::ControllerConfig;
 use codex_game_runner::ControllerError;
 use codex_game_runner::RunnerDeployment;
@@ -92,6 +93,7 @@ async fn run(args: Args, runner_executable: PathBuf) -> anyhow::Result<CampaignR
     let mut controller = CampaignController::open(ControllerConfig {
         deployment,
         runner_executable,
+        bridge_focus: BridgeFocus::TargetApplication,
         limits: CampaignLimits::stage_4b1(),
     })
     .await

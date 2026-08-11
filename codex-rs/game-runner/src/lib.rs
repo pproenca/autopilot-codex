@@ -58,6 +58,7 @@ pub use checkpoint_store::CheckpointStoreError;
 pub use config::GAME_SERVER_NAME;
 pub use config::GENERATION;
 pub use config::MODEL;
+pub use config::BridgeFocus;
 pub use config::RunnerDeployment;
 pub use config::RunnerError;
 pub use config::load_runner_config;
