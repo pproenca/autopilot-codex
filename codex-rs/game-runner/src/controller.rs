@@ -26,6 +26,7 @@ use crate::PauseReason;
 use crate::DecisionGate;
 use crate::DecisionAudit;
 use crate::GameCallPolicy;
+use crate::GameToolFailureSignal;
 use crate::HelperLauncher;
 use crate::OwnerLeaseState;
 use crate::PolicyAudit;
@@ -42,6 +43,7 @@ use crate::controller_types::ControllerStatusEvent;
 use crate::controller_types::EVENT_CAPACITY;
 use crate::controller_types::PendingCommand;
 use crate::controller_types::REQUEST_CAPACITY;
+use crate::controller_types::WorkerCompletion;
 use crate::controller_types::bounded_failure;
 use crate::controller_types::reduce_command;
 use crate::controller_types::reduce_status;
@@ -49,6 +51,9 @@ use crate::controller_types::status_from_checkpoint;
 
 #[path = "controller_runtime.rs"]
 mod controller_runtime;
+
+#[path = "controller_recovery.rs"]
+mod controller_recovery;
 
 use controller_runtime::finish_worker;
 use controller_runtime::resume_campaign;
@@ -179,22 +184,18 @@ impl CampaignController {
 
 struct ActiveCampaign {
     command_tx: tokio::sync::mpsc::Sender<WorkerCommand>,
-    worker: tokio::task::JoinHandle<Result<WorkerCompletion, ControllerError>>,
+    failure_rx: tokio::sync::mpsc::Receiver<GameToolFailureSignal>,
+    failures_closed: bool,
+    worker: tokio::task::JoinHandle<WorkerCompletion>,
     policy: Arc<GameCallPolicy>,
     persistence: Arc<CampaignPersistence>,
     pending: Option<PendingCommand>,
 }
 
-struct WorkerCompletion {
-    exit: CampaignExit,
-    runtime: RunnerRuntime,
-}
-
 enum ActorInput {
     Request(Option<ControllerRequest>),
-    Worker(
-        Result<Result<WorkerCompletion, ControllerError>, tokio::task::JoinError>,
-    ),
+    Failure(Option<GameToolFailureSignal>),
+    Worker(Result<WorkerCompletion, tokio::task::JoinError>),
 }
 
 async fn run_controller_actor(
@@ -218,6 +219,9 @@ async fn run_controller_actor(
         let input = match active.as_mut() {
             Some(active) => tokio::select! {
                 request = request_rx.recv() => ActorInput::Request(request),
+                failure = active.failure_rx.recv(), if !active.failures_closed => {
+                    ActorInput::Failure(failure)
+                }
                 completion = &mut active.worker => ActorInput::Worker(completion),
             },
             None => ActorInput::Request(request_rx.recv().await),
@@ -377,20 +381,64 @@ async fn run_controller_actor(
                 let _ = response.send(());
                 break;
             }
-            ActorInput::Worker(completion) => {
-                let mut finished = active.take().ok_or(ControllerError::ActorClosed)?;
-                let completion = completion
-                    .map_err(|_| ControllerError::ActorClosed)??;
-                let pending = finished.pending.take();
-                let result = finish_worker(
-                    completion,
-                    &finished.persistence,
-                    &events_tx,
-                    &report_tx,
+            ActorInput::Failure(None) => {
+                let active_campaign = active.as_mut().ok_or(ControllerError::ActorClosed)?;
+                active_campaign.failures_closed = true;
+            }
+            ActorInput::Failure(Some(signal)) => {
+                controller_recovery::handle_game_tool_failure(
+                    &config,
+                    active.as_mut().ok_or(ControllerError::ActorClosed)?,
                     &mut status,
                     &status_tx,
+                    &events_tx,
+                    signal,
                 )
-                .await;
+                .await?;
+            }
+            ActorInput::Worker(completion) => {
+                let mut finished = active.take().ok_or(ControllerError::ActorClosed)?;
+                let completion = completion.map_err(|_| ControllerError::ActorClosed)?;
+                let pending = finished.pending.take();
+                let mut recovery_checkpoint_installed = false;
+                let result = match completion {
+                    WorkerCompletion {
+                        exit: Ok(CampaignExit::RecoveryRequired),
+                        runtime,
+                    } => {
+                        match controller_recovery::finish_recovery_exit(
+                            &config,
+                            Arc::clone(&store),
+                            runtime,
+                            Arc::clone(&finished.persistence),
+                            &mut status,
+                            &status_tx,
+                            &events_tx,
+                            &report_tx,
+                        )
+                        .await
+                        {
+                            Ok(recovery) => {
+                                active = recovery.active;
+                                checkpoint = Some(recovery.checkpoint);
+                                recovery_checkpoint_installed = true;
+                                Ok(())
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    completion => {
+                        finish_worker(
+                            completion,
+                            &finished.persistence,
+                            &events_tx,
+                            &report_tx,
+                            &mut status,
+                            &status_tx,
+                        )
+                        .await
+                    }
+                };
                 if let Err(error) = &result {
                     let failure = bounded_failure(CampaignFailureKind::Runtime, error);
                     let _ = events_tx.send(CampaignEvent::Failure(failure.clone()));
@@ -406,10 +454,12 @@ async fn run_controller_actor(
                         .send(Err(ControllerError::CampaignBlocked { failure }))
                         .await;
                 }
-                if let Ok(updated_checkpoint) = finished.persistence.snapshot().await {
-                    checkpoint = Some(updated_checkpoint);
-                } else if status == CampaignStatus::Idle {
-                    checkpoint = None;
+                if !recovery_checkpoint_installed {
+                    if let Ok(updated_checkpoint) = finished.persistence.snapshot().await {
+                        checkpoint = Some(updated_checkpoint);
+                    } else if status == CampaignStatus::Idle {
+                        checkpoint = None;
+                    }
                 }
                 if let Some(pending) = pending {
                     let response_result = match result {
@@ -417,8 +467,6 @@ async fn run_controller_actor(
                         Err(error) => Err(error),
                     };
                     let _ = pending.response.send(response_result);
-                } else {
-                    result?;
                 }
             }
         }

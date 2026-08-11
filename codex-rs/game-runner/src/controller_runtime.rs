@@ -70,6 +70,7 @@ pub(super) async fn start_fresh_campaign(
         .await
         .map_err(|source| ControllerError::Persistence { source })?;
     let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
+    let (failure_tx, failure_rx) = tokio::sync::mpsc::channel(1);
     let limits = config.limits;
     let target_app = config.deployment.target_app.clone();
     let worker_policy = Arc::clone(&policy);
@@ -85,16 +86,19 @@ pub(super) async fn start_fresh_campaign(
                     persistence: worker_persistence,
                     events,
                     commands: Some(command_rx),
-                    failures: None,
+                    failures: Some(failure_tx),
                     start: CampaignStart::Fresh { target_app },
                 },
             )
-            .await?;
-        Ok(WorkerCompletion { exit, runtime })
+            .await
+            .map_err(ControllerError::from);
+        WorkerCompletion { exit, runtime }
     });
     Ok((
         ActiveCampaign {
             command_tx,
+            failure_rx,
+            failures_closed: false,
             worker,
             policy,
             persistence,
@@ -116,6 +120,15 @@ pub(super) async fn resume_campaign(
     })
     .ensure_serving(&config.deployment)
     .await?;
+    resume_ready_campaign(config, store, events, checkpoint).await
+}
+
+pub(super) async fn resume_ready_campaign(
+    config: &ControllerConfig,
+    store: Arc<CampaignCheckpointStore>,
+    events: tokio::sync::broadcast::Sender<CampaignEvent>,
+    checkpoint: CampaignCheckpoint,
+) -> Result<(ActiveCampaign, CampaignCheckpoint), ControllerError> {
     let runtime_config = crate::load_runner_config(
         &config.deployment,
         &config.runner_executable,
@@ -181,6 +194,7 @@ pub(super) async fn resume_campaign(
         .await
         .map_err(|source| ControllerError::Persistence { source })?;
     let (command_tx, command_rx) = tokio::sync::mpsc::channel(1);
+    let (failure_tx, failure_rx) = tokio::sync::mpsc::channel(1);
     let limits = config.limits;
     let worker_policy = Arc::clone(&policy);
     let worker_persistence = Arc::clone(&persistence);
@@ -198,16 +212,19 @@ pub(super) async fn resume_campaign(
                     persistence: worker_persistence,
                     events,
                     commands: Some(command_rx),
-                    failures: None,
+                    failures: Some(failure_tx),
                     start: worker_start,
                 },
             )
-            .await?;
-        Ok(WorkerCompletion { exit, runtime })
+            .await
+            .map_err(ControllerError::from);
+        WorkerCompletion { exit, runtime }
     });
     Ok((
         ActiveCampaign {
             command_tx,
+            failure_rx,
+            failures_closed: false,
             worker,
             policy,
             persistence,
@@ -234,7 +251,7 @@ pub(super) async fn finish_worker(
             message: format!("failed to flush campaign rollout: {error}"),
         })?;
     match completion.exit {
-        CampaignExit::VerifiedWin(report) => {
+        Ok(CampaignExit::VerifiedWin(report)) => {
             let evidence_reference = report
                 .outcome
                 .as_ref()
@@ -269,7 +286,7 @@ pub(super) async fn finish_worker(
             shutdown_runtime(completion.runtime, ShutdownMode::Completed).await?;
             let _ = report_tx.send(Ok(report)).await;
         }
-        CampaignExit::Paused => {
+        Ok(CampaignExit::Paused) => {
             let owner_generation = persistence.snapshot().await.map_err(|source| {
                 ControllerError::Persistence { source }
             })?.owner_generation;
@@ -297,7 +314,7 @@ pub(super) async fn finish_worker(
                 }))
                 .await;
         }
-        CampaignExit::Stopped => {
+        Ok(CampaignExit::Stopped) => {
             shutdown_runtime(completion.runtime, ShutdownMode::Completed).await?;
             persistence
                 .remove()
@@ -311,12 +328,12 @@ pub(super) async fn finish_worker(
             )?;
             let _ = report_tx.send(Err(ControllerError::CampaignStopped)).await;
         }
-        CampaignExit::RecoveryRequired => {
+        Ok(CampaignExit::RecoveryRequired) => {
             return Err(ControllerError::Runner(RunnerError::CampaignFailed {
                 message: "helper recovery exit reached the normal worker finisher".to_string(),
             }));
         }
-        CampaignExit::Blocked(report) => {
+        Ok(CampaignExit::Blocked(report)) => {
             shutdown_runtime(completion.runtime, ShutdownMode::Interrupt).await?;
             let failure = bounded_failure(
                 CampaignFailureKind::Campaign,
@@ -338,11 +355,15 @@ pub(super) async fn finish_worker(
                 .send(Err(ControllerError::CampaignBlocked { failure }))
                 .await;
         }
+        Err(error) => {
+            shutdown_runtime(completion.runtime, ShutdownMode::Interrupt).await?;
+            return Err(error);
+        }
     }
     Ok(())
 }
 
-async fn shutdown_runtime(
+pub(super) async fn shutdown_runtime(
     runtime: RunnerRuntime,
     mode: ShutdownMode,
 ) -> Result<(), ControllerError> {

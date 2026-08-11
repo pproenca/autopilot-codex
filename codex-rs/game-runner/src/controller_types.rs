@@ -4,6 +4,7 @@ use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
 use crate::CampaignCheckpoint;
 use crate::CampaignLimits;
+use crate::CampaignExit;
 use crate::CampaignSummary;
 use crate::CheckpointStoreError;
 use crate::DurableCampaignState;
@@ -14,6 +15,7 @@ use crate::PersistenceError;
 use crate::ReportedOutcome;
 use crate::RunnerDeployment;
 use crate::RunnerError;
+use crate::RunnerRuntime;
 
 const MAX_FAILURE_SUMMARY_BYTES: usize = 2 * 1024;
 pub(crate) const EVENT_CAPACITY: usize = 256;
@@ -66,6 +68,11 @@ pub(crate) enum ControllerRequest {
 pub(crate) struct PendingCommand {
     pub(crate) response:
         tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
+}
+
+pub(crate) struct WorkerCompletion {
+    pub(crate) exit: Result<CampaignExit, ControllerError>,
+    pub(crate) runtime: RunnerRuntime,
 }
 
 pub(crate) fn status_from_checkpoint(checkpoint: &CampaignCheckpoint) -> CampaignStatus {
