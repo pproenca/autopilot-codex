@@ -55,12 +55,17 @@ pub enum ControllerError {
     CampaignStopped,
     #[error("campaign blocked: {failure:?}")]
     CampaignBlocked { failure: CampaignFailure },
+    #[error("campaign context can only be compacted while running")]
+    CampaignNotRunning,
 }
 
 pub(crate) enum ControllerRequest {
     Command {
         command: CampaignCommand,
         response: tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
+    },
+    Compact {
+        response: tokio::sync::oneshot::Sender<Result<(), ControllerError>>,
     },
     Shutdown {
         response: tokio::sync::oneshot::Sender<()>,
@@ -177,6 +182,7 @@ pub enum CampaignEvent {
     Mutation(AuthorizedMutation),
     MutationFinished(MutationResult),
     Outcome(ReportedOutcome),
+    ContextCompacted,
     Failure(CampaignFailure),
 }
 
@@ -207,7 +213,6 @@ pub(crate) enum ControllerStatusEvent {
     StopCommitted,
     VictoryCommitted { summary: CampaignSummary },
     Blocked { failure: CampaignFailure },
-    CrashNormalized,
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
@@ -340,16 +345,6 @@ pub(crate) fn reduce_status(
             failure: failure.clone(),
         }),
         (
-            CampaignStatus::Running { .. }
-            | CampaignStatus::Pausing
-            | CampaignStatus::Recovering { .. }
-            | CampaignStatus::Stopping
-            | CampaignStatus::Blocked { .. },
-            ControllerStatusEvent::CrashNormalized,
-        ) => Ok(CampaignStatus::Paused {
-            reason: PauseReason::UnexpectedExit,
-        }),
-        (
             CampaignStatus::Idle | CampaignStatus::Won { .. },
             ControllerStatusEvent::StartCommitted {
                 attempt_number: 0,
@@ -451,12 +446,7 @@ pub(crate) fn reduce_status(
             CampaignStatus::Blocked { .. },
             ControllerStatusEvent::Blocked { .. },
         )
-        | (
-            CampaignStatus::Idle
-            | CampaignStatus::Paused { .. }
-            | CampaignStatus::Won { .. },
-            ControllerStatusEvent::CrashNormalized,
-        ) => Err(StatusTransitionError {
+        => Err(StatusTransitionError {
             status: status.clone(),
             event,
         }),

@@ -160,7 +160,7 @@ fn status_reducer_covers_every_legal_actor_transition() {
 }
 
 #[test]
-fn blocked_and_crash_normalization_transitions_are_exhaustive() {
+fn blocked_transitions_are_exhaustive() {
     for status in [
         CampaignStatus::Idle,
         CampaignStatus::Running { attempt_number: 2 },
@@ -182,21 +182,6 @@ fn blocked_and_crash_normalization_transitions_are_exhaustive() {
                 },
             ),
             Ok(CampaignStatus::Blocked { failure: failure() })
-        );
-    }
-
-    for status in [
-        CampaignStatus::Running { attempt_number: 2 },
-        CampaignStatus::Pausing,
-        CampaignStatus::Recovering { cycle: 1 },
-        CampaignStatus::Stopping,
-        CampaignStatus::Blocked { failure: failure() },
-    ] {
-        assert_eq!(
-            reduce_status(&status, ControllerStatusEvent::CrashNormalized),
-            Ok(CampaignStatus::Paused {
-                reason: PauseReason::UnexpectedExit,
-            })
         );
     }
 }

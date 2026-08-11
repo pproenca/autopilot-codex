@@ -10,16 +10,17 @@ use super::CampaignDirective;
 use super::CampaignExecutionContext;
 use super::CampaignExit;
 use super::CampaignRun;
-use super::CampaignTerminalState;
 use super::SafeBoundary;
 use super::SafeBoundaryDirective;
+use super::WorkerCommand;
+use super::campaign_compaction::CampaignCompaction;
 use super::campaign_event::begin_safe_interrupt;
 use super::campaign_event::block_exit as block_report;
 use super::campaign_event::build_exit as build_report;
 use super::campaign_event::initialize_campaign_start;
-use super::campaign_event::reduce_accepted_outcome;
 use super::campaign_event::reduce_turn_aborted;
 use super::campaign_event::reduce_turn_complete;
+use super::campaign_dynamic_tool::prepare_dynamic_tool_response;
 use super::campaign_game_call::GameCallEndDirective;
 use super::campaign_game_call::finish_game_call_event;
 use super::campaign_submit::campaign_submit_error;
@@ -48,6 +49,7 @@ impl CampaignRun {
         let tools = CampaignTools::new(Arc::clone(&gate));
         let mut safe_boundary = SafeBoundary::default();
         let mut recovery_pending = false;
+        let mut compaction = CampaignCompaction::default();
         let mut worker_exit_deadline: Option<tokio::time::Instant> = None;
 
         loop {
@@ -61,6 +63,10 @@ impl CampaignRun {
                     let Some(command) = command else {
                         continue;
                     };
+                    if command == WorkerCommand::Compact {
+                        compaction.request();
+                        continue;
+                    }
                     policy.close_mutation_lane();
                     match safe_boundary.request(command) {
                         Ok(SafeBoundaryDirective::Interrupt) => {
@@ -150,6 +156,9 @@ impl CampaignRun {
 
             match event.msg {
                 EventMsg::TurnStarted(event) => {
+                    if compaction.is_active() {
+                        continue;
+                    }
                     if let Err(error) = progress.on_turn_started(event.turn_id) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
                     }
@@ -241,8 +250,17 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::DynamicToolCallRequest(request) => {
-                    let response = match tools.handle(&request) {
-                        Ok(response) => response,
+                    let prepared = match prepare_dynamic_tool_response(
+                        request,
+                        &tools,
+                        &context,
+                        &mut progress,
+                        policy,
+                        &gate,
+                    )
+                    .await
+                    {
+                        Ok(prepared) => prepared,
                         Err(error) => {
                             return block_report(
                                 session,
@@ -253,91 +271,14 @@ impl CampaignRun {
                             );
                         }
                     };
-                    let accepted_plan = response.success && request.tool == "record_plan";
-                    let accepted_outcome = response.success && request.tool == "report_outcome";
-                    if accepted_plan {
-                        let snapshot = gate.snapshot();
-                        let Some(plan) = snapshot.plan.as_ref() else {
-                            return block_report(
-                                session,
-                                &progress,
-                                policy,
-                                &gate,
-                                "accepted plan response did not retain its plan".to_string(),
-                            );
-                        };
-                        if let Err(error) = context
-                            .record_plan(&progress.summary(), plan, &gate, policy)
-                            .await
-                        {
-                            return block_report(
-                                session,
-                                &progress,
-                                policy,
-                                &gate,
-                                error.to_string(),
-                            );
-                        }
-                    }
-                    let outcome_directive = if accepted_outcome {
-                        let snapshot = gate.snapshot();
-                        let Some(outcome) = snapshot.outcome else {
-                            return block_report(
-                                session,
-                                &progress,
-                                policy,
-                                &gate,
-                                "accepted outcome response did not retain evidence".to_string(),
-                            );
-                        };
-                        let directive = match reduce_accepted_outcome(&mut progress, &outcome) {
-                            Ok(directive) => directive,
-                            Err(error) => {
-                                return block_report(
-                                    session,
-                                    &progress,
-                                    policy,
-                                    &gate,
-                                    error.to_string(),
-                                );
-                            }
-                        };
-                        if let Err(error) = context
-                            .record_outcome(
-                                &progress.summary(),
-                                &outcome,
-                                &directive,
-                                &gate,
-                                policy,
-                            )
-                            .await
-                        {
-                            return block_report(
-                                session,
-                                &progress,
-                                policy,
-                                &gate,
-                                error.to_string(),
-                            );
-                        }
-                        if matches!(
-                            directive,
-                            CampaignDirective::Complete(CampaignTerminalState::Won)
-                        ) {
-                            policy.close_mutation_lane();
-                        }
-                        Some(directive)
-                    } else {
-                        None
-                    };
                     thread
                         .submit(Op::DynamicToolResponse {
-                            id: request.call_id,
-                            response,
+                            id: prepared.call_id,
+                            response: prepared.response,
                         })
                         .await
                         .map_err(campaign_submit_error)?;
-                    if let Some(directive) = outcome_directive {
+                    if let Some(directive) = prepared.outcome_directive {
                         match directive {
                             CampaignDirective::InterruptThenContinue(reason) => {
                                 if let Err(error) =
@@ -374,6 +315,19 @@ impl CampaignRun {
                     }
                 }
                 EventMsg::TurnComplete(event) => {
+                    match compaction.finish(
+                        event.error.as_ref().map(|error| error.message.clone()),
+                    ) {
+                        Ok(Some(reason)) => {
+                            context.record_context_compacted();
+                            submit_continuation(thread, &gate, &progress, reason).await?;
+                            continue;
+                        }
+                        Err(error) => {
+                            return block_report(session, &progress, policy, &gate, error);
+                        }
+                        Ok(None) => {}
+                    }
                     if recovery_pending {
                         gate.invalidate(InvalidationReason::TurnAborted);
                         return Ok(CampaignExit::RecoveryRequired);
@@ -402,7 +356,9 @@ impl CampaignRun {
                     };
                     match directive {
                         CampaignDirective::SubmitContinuation(reason) => {
-                            submit_continuation(thread, &gate, &progress, reason).await?;
+                            compaction
+                                .submit_at_boundary(thread, &gate, &progress, reason)
+                                .await?;
                         }
                         CampaignDirective::InterruptThenContinue(reason) => {
                             if let Err(error) =
@@ -450,7 +406,9 @@ impl CampaignRun {
                     };
                     match directive {
                         CampaignDirective::SubmitContinuation(reason) => {
-                            submit_continuation(thread, &gate, &progress, reason).await?;
+                            compaction
+                                .submit_at_boundary(thread, &gate, &progress, reason)
+                                .await?;
                         }
                         CampaignDirective::Block(reason) => {
                             return block_report(
@@ -472,6 +430,9 @@ impl CampaignRun {
                             );
                         }
                     }
+                }
+                EventMsg::ContextCompacted(_) => {
+                    compaction.record_applied();
                 }
                 EventMsg::ExecApprovalRequest(_)
                 | EventMsg::ApplyPatchApprovalRequest(_)

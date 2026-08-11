@@ -29,6 +29,10 @@ async fn open_idle_controller_rejects_invalid_commands_and_retains_the_lock() ->
         Err(ControllerError::InvalidCommand(_))
     ));
     assert!(matches!(
+        controller.compact().await,
+        Err(ControllerError::CampaignNotRunning)
+    ));
+    assert!(matches!(
         controller.command(CampaignCommand::Start).await,
         Err(ControllerError::Runner(_))
     ));

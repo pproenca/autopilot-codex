@@ -61,6 +61,7 @@ pub(crate) enum CampaignExit {
 pub(crate) enum WorkerCommand {
     Pause,
     Stop,
+    Compact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +147,12 @@ impl CampaignRun {
 
 #[path = "campaign_loop.rs"]
 mod campaign_loop;
+
+#[path = "campaign_compaction.rs"]
+mod campaign_compaction;
+
+#[path = "campaign_dynamic_tool.rs"]
+mod campaign_dynamic_tool;
 
 #[path = "campaign_coordination.rs"]
 mod campaign_coordination;

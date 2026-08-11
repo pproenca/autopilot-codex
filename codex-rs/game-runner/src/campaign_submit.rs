@@ -64,6 +64,9 @@ pub(super) fn worker_command_exit(command: WorkerCommand) -> CampaignExit {
     match command {
         WorkerCommand::Pause => CampaignExit::Paused,
         WorkerCommand::Stop => CampaignExit::Stopped,
+        WorkerCommand::Compact => {
+            unreachable!("compaction commands do not exit the campaign worker")
+        }
     }
 }
 

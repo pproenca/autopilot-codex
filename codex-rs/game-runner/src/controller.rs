@@ -136,6 +136,15 @@ impl CampaignController {
         self.events_tx.subscribe()
     }
 
+    pub async fn compact(&self) -> Result<(), ControllerError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.request_tx
+            .send(ControllerRequest::Compact { response })
+            .await
+            .map_err(|_| ControllerError::ActorClosed)?;
+        receiver.await.map_err(|_| ControllerError::ActorClosed)?
+    }
+
     pub async fn wait_for_report(&mut self) -> Result<CampaignReport, ControllerError> {
         match self.status() {
             CampaignStatus::Paused { reason } => {
@@ -225,6 +234,17 @@ async fn run_controller_actor(
         };
         match input {
             ActorInput::Request(None) => break,
+            ActorInput::Request(Some(ControllerRequest::Compact { response })) => {
+                let result = match (&status, active.as_mut()) {
+                    (CampaignStatus::Running { .. }, Some(active_campaign)) => active_campaign
+                        .command_tx
+                        .send(WorkerCommand::Compact)
+                        .await
+                        .map_err(|_| ControllerError::ActorClosed),
+                    _ => Err(ControllerError::CampaignNotRunning),
+                };
+                let _ = response.send(result);
+            }
             ActorInput::Request(Some(ControllerRequest::Command { command, response })) => {
                 let directive = match reduce_command(&status, command.clone()) {
                     Ok(directive) => directive,

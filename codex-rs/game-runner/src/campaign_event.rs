@@ -204,6 +204,12 @@ impl CampaignExecutionContext {
             ),
         }
     }
+
+    pub(super) fn record_context_compacted(&self) {
+        if let Self::Durable { events, .. } = self {
+            let _ = events.send(CampaignEvent::ContextCompacted);
+        }
+    }
 }
 
 async fn persist_summary(
