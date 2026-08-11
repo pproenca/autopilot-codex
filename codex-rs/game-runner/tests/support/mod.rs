@@ -13,6 +13,8 @@ use tokio::net::unix::OwnedWriteHalf;
 
 #[allow(dead_code)]
 pub mod continuous_game;
+#[allow(dead_code)]
+pub mod durable_game;
 
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
