@@ -17,10 +17,10 @@ use codex_game_runner::CampaignSummary;
 use codex_game_runner::CampaignTerminalState;
 use codex_game_runner::ControllerConfig;
 use codex_game_runner::DurableCampaignState;
+use codex_game_runner::MAX_CHECKPOINT_BYTES;
 use codex_game_runner::PauseReason;
 use codex_game_runner::RunnerDeployment;
 use codex_game_runner::StrategyRecord;
-use codex_game_runner::MAX_CHECKPOINT_BYTES;
 use core_test_support::responses;
 use core_test_support::responses::mount_compact_user_history_with_summary_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -82,9 +82,9 @@ async fn loss_compaction_crash_resume_restart_and_victory() -> anyhow::Result<()
     let response_mock = mount_sse_sequence(
         &server,
         vec![
-            exec_response("loss-response", "loss-exec", loss_script()),
+            exec_response("loss-response", "loss-exec", loss_script()?),
             exec_response("hold-response", "hold-exec", hold_script()),
-            exec_response("win-response", "win-exec", victory_script()),
+            exec_response("win-response", "win-exec", victory_script()?),
         ],
     )
     .await;
@@ -111,7 +111,10 @@ async fn loss_compaction_crash_resume_restart_and_victory() -> anyhow::Result<()
     .await?;
     std::fs::write(&finish_path, [])?;
     let status = child.wait().await?;
-    anyhow::ensure!(status.success(), "vertical fixture failed to shut down cleanly");
+    anyhow::ensure!(
+        status.success(),
+        "vertical fixture failed to shut down cleanly"
+    );
     restore_running_checkpoint(temp.path(), &original)?;
 
     let mut controller = CampaignController::open(controller_config(
@@ -198,7 +201,11 @@ async fn loss_compaction_crash_resume_restart_and_victory() -> anyhow::Result<()
         3
     );
     assert_eq!(
-        trace.calls.iter().filter(|call| call.method == "get_app_state").count(),
+        trace
+            .calls
+            .iter()
+            .filter(|call| call.method == "get_app_state")
+            .count(),
         5
     );
     assert_eq!(
@@ -209,16 +216,25 @@ async fn loss_compaction_crash_resume_restart_and_victory() -> anyhow::Result<()
             .map(|call| call.method.as_str()),
         Some("get_app_state")
     );
-    assert_eq!(trace.calls.last().map(|call| call.method.as_str()), Some("get_app_state"));
+    assert_eq!(
+        trace.calls.last().map(|call| call.method.as_str()),
+        Some("get_app_state")
+    );
     assert_ne!(
-        report.before.as_ref().map(|observation| &observation.reference),
+        report
+            .before
+            .as_ref()
+            .map(|observation| &observation.reference),
         original
             .latest_observation
             .as_ref()
             .map(|observation| &observation.reference)
     );
     assert_eq!(
-        report.after.as_ref().map(|observation| &observation.reference),
+        report
+            .after
+            .as_ref()
+            .map(|observation| &observation.reference),
         Some(evidence_reference)
     );
     let resumed_request = &response_mock.requests()[2];
@@ -406,7 +422,7 @@ fn mobility_strategy() -> StrategyRecord {
     }
 }
 
-fn loss_script() -> String {
+fn loss_script() -> anyhow::Result<String> {
     scripted_turn(
         &[(180, 640, "take the losing move", "the loss screen")],
         &format!(
@@ -415,15 +431,20 @@ fn loss_script() -> String {
   visible_evidence_summary: "the loss screen is visible",
   lesson: "preserve mobility",
   strategy: {}"#,
-            serde_json::to_string(&mobility_strategy()).expect("serialize mobility strategy")
+            serde_json::to_string(&mobility_strategy())?
         ),
     )
 }
 
-fn victory_script() -> String {
+fn victory_script() -> anyhow::Result<String> {
     scripted_turn(
         &[
-            (510, 540, "click the visible restart", "the fresh run screen"),
+            (
+                510,
+                540,
+                "click the visible restart",
+                "the fresh run screen",
+            ),
             (260, 640, "take the winning move", "the full victory screen"),
         ],
         r#"outcome: "win",
@@ -433,13 +454,15 @@ fn victory_script() -> String {
     )
 }
 
-fn scripted_turn(steps: &[(i64, i64, &str, &str)], outcome: &str) -> String {
+fn scripted_turn(steps: &[(i64, i64, &str, &str)], outcome: &str) -> anyhow::Result<String> {
     use std::fmt::Write;
 
     let mut script = String::new();
     for (index, (x, y, objective, result)) in steps.iter().enumerate() {
-        writeln!(script, "const before{index} = await tools.mcp__game__get_app_state({{}});")
-            .expect("write capture script");
+        writeln!(
+            script,
+            "const before{index} = await tools.mcp__game__get_app_state({{}});"
+        )?;
         writeln!(
             script,
             r#"await tools.game_runner__record_plan({{
@@ -456,17 +479,17 @@ fn scripted_turn(steps: &[(i64, i64, &str, &str)], outcome: &str) -> String {
   invalidation_condition: "the visible state changes"
 }});
 await tools.mcp__game__click({{x: {x}, y: {y}}});"#
-        )
-        .expect("write planned action script");
+        )?;
     }
-    writeln!(script, "const after = await tools.mcp__game__get_app_state({{}});")
-        .expect("write outcome capture");
+    writeln!(
+        script,
+        "const after = await tools.mcp__game__get_app_state({{}});"
+    )?;
     writeln!(
         script,
         "await tools.game_runner__report_outcome({{\n  {outcome}\n}});"
-    )
-    .expect("write outcome script");
-    script
+    )?;
+    Ok(script)
 }
 
 fn hold_script() -> String {

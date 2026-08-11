@@ -7,10 +7,10 @@ use super::ControllerConfig;
 use super::controller_runtime::resume_ready_campaign;
 use super::controller_runtime::shutdown_runtime;
 use super::update_status;
-use crate::CampaignEvent;
-use crate::CampaignFailureKind;
 use crate::CampaignCheckpoint;
 use crate::CampaignCheckpointStore;
+use crate::CampaignEvent;
+use crate::CampaignFailureKind;
 use crate::CampaignPersistence;
 use crate::CampaignReport;
 use crate::CampaignStatus;
@@ -20,10 +20,10 @@ use crate::GameToolFailureSignal;
 use crate::HelperLauncher;
 use crate::HelperReadiness;
 use crate::HelperRecovery;
+use crate::PauseReason;
 use crate::ReadinessLimits;
 use crate::RecoveryLimits;
 use crate::RecoveryOutcome;
-use crate::PauseReason;
 use crate::RunnerError;
 use crate::RunnerRuntime;
 use crate::ShutdownMode;
@@ -134,23 +134,34 @@ pub(super) struct RecoveryCompletion {
     pub(super) checkpoint: CampaignCheckpoint,
 }
 
+pub(super) struct RecoveryExitContext<'a> {
+    pub(super) config: &'a ControllerConfig,
+    pub(super) store: Arc<CampaignCheckpointStore>,
+    pub(super) persistence: Arc<CampaignPersistence>,
+    pub(super) status: &'a mut CampaignStatus,
+    pub(super) status_tx: &'a tokio::sync::watch::Sender<CampaignStatus>,
+    pub(super) events_tx: &'a tokio::sync::broadcast::Sender<CampaignEvent>,
+    pub(super) report_tx: &'a tokio::sync::mpsc::Sender<Result<CampaignReport, ControllerError>>,
+}
+
 pub(super) async fn finish_recovery_exit(
-    config: &ControllerConfig,
-    store: Arc<CampaignCheckpointStore>,
     runtime: RunnerRuntime,
-    persistence: Arc<CampaignPersistence>,
-    status: &mut CampaignStatus,
-    status_tx: &tokio::sync::watch::Sender<CampaignStatus>,
-    events_tx: &tokio::sync::broadcast::Sender<CampaignEvent>,
-    report_tx: &tokio::sync::mpsc::Sender<Result<CampaignReport, ControllerError>>,
+    context: RecoveryExitContext<'_>,
 ) -> Result<RecoveryCompletion, ControllerError> {
-    let flush_result = runtime
-        .thread
-        .flush_rollout()
-        .await
-        .map_err(|error| ControllerError::Runner(RunnerError::CampaignFailed {
+    let RecoveryExitContext {
+        config,
+        store,
+        persistence,
+        status,
+        status_tx,
+        events_tx,
+        report_tx,
+    } = context;
+    let flush_result = runtime.thread.flush_rollout().await.map_err(|error| {
+        ControllerError::Runner(RunnerError::CampaignFailed {
             message: format!("failed to flush damaged campaign rollout: {error}"),
-        }));
+        })
+    });
     let shutdown_result = shutdown_runtime(runtime, ShutdownMode::Completed).await;
     flush_result?;
     shutdown_result?;
@@ -178,8 +189,9 @@ pub(super) async fn finish_recovery_exit(
     );
     let outcome = recovery.recover(&config.deployment).await?;
     let attempts = match &outcome {
-        RecoveryOutcome::Recovered { attempts }
-        | RecoveryOutcome::Exhausted { attempts, .. } => *attempts,
+        RecoveryOutcome::Recovered { attempts } | RecoveryOutcome::Exhausted { attempts, .. } => {
+            *attempts
+        }
     };
     for _ in 0..attempts {
         update_status(
@@ -195,13 +207,8 @@ pub(super) async fn finish_recovery_exit(
                 .snapshot()
                 .await
                 .map_err(|source| ControllerError::Persistence { source })?;
-            let (active, checkpoint) = resume_ready_campaign(
-                config,
-                store,
-                events_tx.clone(),
-                checkpoint,
-            )
-            .await?;
+            let (active, checkpoint) =
+                resume_ready_campaign(config, store, events_tx.clone(), checkpoint).await?;
             update_status(
                 status,
                 ControllerStatusEvent::RunningCommitted {
@@ -215,7 +222,10 @@ pub(super) async fn finish_recovery_exit(
                 checkpoint,
             })
         }
-        RecoveryOutcome::Exhausted { attempts: _, reason } => {
+        RecoveryOutcome::Exhausted {
+            attempts: _,
+            reason,
+        } => {
             let checkpoint = pause_exhausted_recovery(
                 persistence.as_ref(),
                 reason.clone(),

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::AuthorizedMutation;
 use crate::CampaignCheckpoint;
 use crate::CampaignCheckpointStore;
 use crate::CampaignSummary;
@@ -11,7 +12,6 @@ use crate::DurableMutationResult;
 use crate::MutationResult;
 use crate::ObservationEvidence;
 use crate::PolicyAudit;
-use crate::AuthorizedMutation;
 
 pub struct CampaignPersistence {
     store: Arc<CampaignCheckpointStore>,
@@ -31,11 +31,6 @@ pub enum PersistenceError {
     Store {
         #[source]
         source: CheckpointStoreError,
-    },
-    #[error("campaign checkpoint task failed")]
-    Task {
-        #[source]
-        source: tokio::task::JoinError,
     },
     #[error("a live mutation call is already being persisted")]
     ActiveMutation,
@@ -64,12 +59,9 @@ impl CampaignPersistence {
         }
     }
 
-    pub async fn install(
-        &self,
-        checkpoint: CampaignCheckpoint,
-    ) -> Result<(), PersistenceError> {
+    pub async fn install(&self, checkpoint: CampaignCheckpoint) -> Result<(), PersistenceError> {
         let mut state = self.state.lock().await;
-        self.write_checkpoint(&checkpoint).await?;
+        self.write_checkpoint(&checkpoint)?;
         state.checkpoint = Some(checkpoint);
         state.active_call_id = None;
         Ok(())
@@ -98,7 +90,7 @@ impl CampaignPersistence {
         candidate.summary = summary;
         candidate.decision_audit = decision_audit;
         candidate.policy_audit = policy_audit;
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         Ok(())
     }
@@ -131,7 +123,7 @@ impl CampaignPersistence {
         candidate.decision_audit = update.decision_audit;
         candidate.policy_audit = update.policy_audit;
         candidate.unresolved_mutation = Some(mutation.clone());
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         state.active_call_id = Some(update.authorization.call_id.clone());
         Ok(mutation)
@@ -166,7 +158,7 @@ impl CampaignPersistence {
             MutationResult::CleanFailure => DurableMutationResult::CleanFailure,
             MutationResult::Indeterminate => DurableMutationResult::Indeterminate,
         };
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         state.active_call_id = None;
         Ok(())
@@ -197,7 +189,7 @@ impl CampaignPersistence {
             reference: observation.reference.clone(),
         });
         candidate.unresolved_mutation = None;
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         Ok(())
     }
@@ -217,7 +209,7 @@ impl CampaignPersistence {
             return Ok(());
         }
         mutation.result = DurableMutationResult::Indeterminate;
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         state.active_call_id = None;
         Ok(())
@@ -235,32 +227,24 @@ impl CampaignPersistence {
             .ok_or(PersistenceError::MissingCheckpoint)?;
         candidate.state = durable_state;
         candidate.owner_generation = owner_generation;
-        self.write_checkpoint(&candidate).await?;
+        self.write_checkpoint(&candidate)?;
         state.checkpoint = Some(candidate);
         Ok(())
     }
 
     pub async fn remove(&self) -> Result<(), PersistenceError> {
         let mut state = self.state.lock().await;
-        let store = Arc::clone(&self.store);
-        tokio::task::spawn_blocking(move || store.remove())
-            .await
-            .map_err(|source| PersistenceError::Task { source })?
+        self.store
+            .remove()
             .map_err(|source| PersistenceError::Store { source })?;
         state.checkpoint = None;
         state.active_call_id = None;
         Ok(())
     }
 
-    async fn write_checkpoint(
-        &self,
-        checkpoint: &CampaignCheckpoint,
-    ) -> Result<(), PersistenceError> {
-        let store = Arc::clone(&self.store);
-        let checkpoint = checkpoint.clone();
-        tokio::task::spawn_blocking(move || store.replace(&checkpoint))
-            .await
-            .map_err(|source| PersistenceError::Task { source })?
+    fn write_checkpoint(&self, checkpoint: &CampaignCheckpoint) -> Result<(), PersistenceError> {
+        self.store
+            .replace(checkpoint)
             .map_err(|source| PersistenceError::Store { source })
     }
 }

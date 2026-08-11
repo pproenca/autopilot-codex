@@ -203,7 +203,7 @@ pub(super) async fn resume_ready_campaign(
     let worker_policy = Arc::clone(&policy);
     let worker_persistence = Arc::clone(&persistence);
     let worker_start = CampaignStart::Resumed {
-        checkpoint: installed.clone(),
+        checkpoint: Box::new(installed.clone()),
     };
     let worker = tokio::spawn(async move {
         let exit = CampaignRun::new(limits)
@@ -270,9 +270,11 @@ pub(super) async fn finish_worker(
                 .ok_or_else(|| RunnerError::CampaignFailed {
                     message: "verified win report omitted outcome evidence".to_string(),
                 })?;
-            let owner_generation = persistence.snapshot().await.map_err(|source| {
-                ControllerError::Persistence { source }
-            })?.owner_generation;
+            let owner_generation = persistence
+                .snapshot()
+                .await
+                .map_err(|source| ControllerError::Persistence { source })?
+                .owner_generation;
             persistence
                 .set_state(
                     DurableCampaignState::Won { evidence_reference },
@@ -280,9 +282,10 @@ pub(super) async fn finish_worker(
                 )
                 .await
                 .map_err(|source| ControllerError::Persistence { source })?;
-            let snapshot = persistence.snapshot().await.map_err(|source| {
-                ControllerError::Persistence { source }
-            })?;
+            let snapshot = persistence
+                .snapshot()
+                .await
+                .map_err(|source| ControllerError::Persistence { source })?;
             if let Some(outcome) = report.outcome.clone() {
                 let _ = events_tx.send(CampaignEvent::Outcome(outcome));
             }
@@ -298,9 +301,11 @@ pub(super) async fn finish_worker(
             let _ = report_tx.send(Ok(report)).await;
         }
         Ok(CampaignExit::Paused) => {
-            let owner_generation = persistence.snapshot().await.map_err(|source| {
-                ControllerError::Persistence { source }
-            })?.owner_generation;
+            let owner_generation = persistence
+                .snapshot()
+                .await
+                .map_err(|source| ControllerError::Persistence { source })?
+                .owner_generation;
             persistence
                 .set_state(
                     DurableCampaignState::Paused {

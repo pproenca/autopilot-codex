@@ -4,8 +4,8 @@ use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
 use crate::BridgeFocus;
 use crate::CampaignCheckpoint;
-use crate::CampaignLimits;
 use crate::CampaignExit;
+use crate::CampaignLimits;
 use crate::CampaignSummary;
 use crate::CheckpointStoreError;
 use crate::DurableCampaignState;
@@ -73,8 +73,7 @@ pub(crate) enum ControllerRequest {
 }
 
 pub(crate) struct PendingCommand {
-    pub(crate) response:
-        tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
+    pub(crate) response: tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
 }
 
 pub(crate) struct WorkerCompletion {
@@ -108,7 +107,7 @@ pub(crate) fn bounded_failure(
         }
         summary.truncate(boundary);
     }
-    CampaignFailure::new(kind, summary).expect("failure summary was bounded")
+    CampaignFailure { kind, summary }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,10 +194,10 @@ pub struct CommandTransitionError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ControllerDirective {
-    BeginStart,
-    BeginPause,
-    BeginResume,
-    BeginStop,
+    Start,
+    Pause,
+    Resume,
+    Stop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,8 +217,8 @@ pub(crate) enum ControllerStatusEvent {
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[error("event {event:?} is invalid while campaign status is {status:?}")]
 pub(crate) struct StatusTransitionError {
-    pub(crate) status: CampaignStatus,
-    pub(crate) event: ControllerStatusEvent,
+    pub(crate) status: Box<CampaignStatus>,
+    pub(crate) event: Box<ControllerStatusEvent>,
 }
 
 pub(crate) fn reduce_command(
@@ -228,19 +227,11 @@ pub(crate) fn reduce_command(
 ) -> Result<ControllerDirective, CommandTransitionError> {
     match (status, &command) {
         (CampaignStatus::Idle, CampaignCommand::Start)
-        | (CampaignStatus::Won { .. }, CampaignCommand::Start) => {
-            Ok(ControllerDirective::BeginStart)
-        }
-        (CampaignStatus::Running { .. }, CampaignCommand::Pause) => {
-            Ok(ControllerDirective::BeginPause)
-        }
-        (CampaignStatus::Paused { .. }, CampaignCommand::Resume) => {
-            Ok(ControllerDirective::BeginResume)
-        }
+        | (CampaignStatus::Won { .. }, CampaignCommand::Start) => Ok(ControllerDirective::Start),
+        (CampaignStatus::Running { .. }, CampaignCommand::Pause) => Ok(ControllerDirective::Pause),
+        (CampaignStatus::Paused { .. }, CampaignCommand::Resume) => Ok(ControllerDirective::Resume),
         (CampaignStatus::Running { .. }, CampaignCommand::Stop)
-        | (CampaignStatus::Paused { .. }, CampaignCommand::Stop) => {
-            Ok(ControllerDirective::BeginStop)
-        }
+        | (CampaignStatus::Paused { .. }, CampaignCommand::Stop) => Ok(ControllerDirective::Stop),
         (CampaignStatus::Idle, CampaignCommand::Pause)
         | (CampaignStatus::Idle, CampaignCommand::Resume)
         | (CampaignStatus::Idle, CampaignCommand::Stop)
@@ -266,12 +257,10 @@ pub(crate) fn reduce_command(
         | (CampaignStatus::Blocked { .. }, CampaignCommand::Start)
         | (CampaignStatus::Blocked { .. }, CampaignCommand::Pause)
         | (CampaignStatus::Blocked { .. }, CampaignCommand::Resume)
-        | (CampaignStatus::Blocked { .. }, CampaignCommand::Stop) => {
-            Err(CommandTransitionError {
-                status: status.clone(),
-                command,
-            })
-        }
+        | (CampaignStatus::Blocked { .. }, CampaignCommand::Stop) => Err(CommandTransitionError {
+            status: status.clone(),
+            command,
+        }),
     }
 }
 
@@ -301,15 +290,12 @@ pub(crate) fn reduce_status(
             CampaignStatus::Running { .. } | CampaignStatus::Paused { .. },
             ControllerStatusEvent::ResumeStarted,
         ) => Ok(CampaignStatus::Recovering { cycle: 0 }),
-        (
-            CampaignStatus::Recovering { cycle },
-            ControllerStatusEvent::RecoveryCycle,
-        ) => cycle
+        (CampaignStatus::Recovering { cycle }, ControllerStatusEvent::RecoveryCycle) => cycle
             .checked_add(1)
             .map(|cycle| CampaignStatus::Recovering { cycle })
             .ok_or_else(|| StatusTransitionError {
-                status: status.clone(),
-                event: event.clone(),
+                status: Box::new(status.clone()),
+                event: Box::new(event.clone()),
             }),
         (
             CampaignStatus::Recovering { .. },
@@ -326,12 +312,11 @@ pub(crate) fn reduce_status(
         (CampaignStatus::Stopping, ControllerStatusEvent::StopCommitted) => {
             Ok(CampaignStatus::Idle)
         }
-        (
-            CampaignStatus::Running { .. },
-            ControllerStatusEvent::VictoryCommitted { summary },
-        ) => Ok(CampaignStatus::Won {
-            summary: summary.clone(),
-        }),
+        (CampaignStatus::Running { .. }, ControllerStatusEvent::VictoryCommitted { summary }) => {
+            Ok(CampaignStatus::Won {
+                summary: summary.clone(),
+            })
+        }
         (
             CampaignStatus::Idle
             | CampaignStatus::Running { .. }
@@ -346,9 +331,7 @@ pub(crate) fn reduce_status(
         }),
         (
             CampaignStatus::Idle | CampaignStatus::Won { .. },
-            ControllerStatusEvent::StartCommitted {
-                attempt_number: 0,
-            },
+            ControllerStatusEvent::StartCommitted { attempt_number: 0 },
         )
         | (
             CampaignStatus::Running { .. }
@@ -399,9 +382,7 @@ pub(crate) fn reduce_status(
         )
         | (
             CampaignStatus::Recovering { .. },
-            ControllerStatusEvent::RunningCommitted {
-                attempt_number: 0,
-            },
+            ControllerStatusEvent::RunningCommitted { attempt_number: 0 },
         )
         | (
             CampaignStatus::Idle
@@ -442,14 +423,12 @@ pub(crate) fn reduce_status(
             | CampaignStatus::Blocked { .. },
             ControllerStatusEvent::VictoryCommitted { .. },
         )
-        | (
-            CampaignStatus::Blocked { .. },
-            ControllerStatusEvent::Blocked { .. },
-        )
-        => Err(StatusTransitionError {
-            status: status.clone(),
-            event,
-        }),
+        | (CampaignStatus::Blocked { .. }, ControllerStatusEvent::Blocked { .. }) => {
+            Err(StatusTransitionError {
+                status: Box::new(status.clone()),
+                event: Box::new(event),
+            })
+        }
     }
 }
 

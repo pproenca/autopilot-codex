@@ -177,9 +177,7 @@ fn blocked_transitions_are_exhaustive() {
         assert_eq!(
             reduce_status(
                 &status,
-                ControllerStatusEvent::Blocked {
-                    failure: failure(),
-                },
+                ControllerStatusEvent::Blocked { failure: failure() },
             ),
             Ok(CampaignStatus::Blocked { failure: failure() })
         );
@@ -191,8 +189,8 @@ fn invalid_actor_transitions_and_recovery_overflow_are_typed() {
     assert_eq!(
         reduce_status(&CampaignStatus::Idle, ControllerStatusEvent::PauseStarted),
         Err(StatusTransitionError {
-            status: CampaignStatus::Idle,
-            event: ControllerStatusEvent::PauseStarted,
+            status: Box::new(CampaignStatus::Idle),
+            event: Box::new(ControllerStatusEvent::PauseStarted),
         })
     );
     assert_eq!(
@@ -201,8 +199,8 @@ fn invalid_actor_transitions_and_recovery_overflow_are_typed() {
             ControllerStatusEvent::RecoveryCycle,
         ),
         Err(StatusTransitionError {
-            status: CampaignStatus::Recovering { cycle: u8::MAX },
-            event: ControllerStatusEvent::RecoveryCycle,
+            status: Box::new(CampaignStatus::Recovering { cycle: u8::MAX }),
+            event: Box::new(ControllerStatusEvent::RecoveryCycle),
         })
     );
 }
@@ -213,19 +211,15 @@ fn expected_command_transition(
 ) -> Result<ControllerDirective, super::CommandTransitionError> {
     let directive = match (status, command) {
         (CampaignStatus::Idle, CampaignCommand::Start)
-        | (CampaignStatus::Won { .. }, CampaignCommand::Start) => {
-            Some(ControllerDirective::BeginStart)
-        }
+        | (CampaignStatus::Won { .. }, CampaignCommand::Start) => Some(ControllerDirective::Start),
         (CampaignStatus::Running { .. }, CampaignCommand::Pause) => {
-            Some(ControllerDirective::BeginPause)
+            Some(ControllerDirective::Pause)
         }
         (CampaignStatus::Paused { .. }, CampaignCommand::Resume) => {
-            Some(ControllerDirective::BeginResume)
+            Some(ControllerDirective::Resume)
         }
         (CampaignStatus::Running { .. }, CampaignCommand::Stop)
-        | (CampaignStatus::Paused { .. }, CampaignCommand::Stop) => {
-            Some(ControllerDirective::BeginStop)
-        }
+        | (CampaignStatus::Paused { .. }, CampaignCommand::Stop) => Some(ControllerDirective::Stop),
         (CampaignStatus::Idle, CampaignCommand::Pause)
         | (CampaignStatus::Idle, CampaignCommand::Resume)
         | (CampaignStatus::Idle, CampaignCommand::Stop)

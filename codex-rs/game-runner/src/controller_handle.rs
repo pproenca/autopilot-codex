@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::ControllerActor;
 use super::run_controller_actor;
 use crate::CampaignCheckpointStore;
 use crate::CampaignCommand;
@@ -28,13 +29,11 @@ impl CampaignController {
         let (store, guard) = CampaignCheckpointStore::open(&config.deployment.codex_home)
             .map_err(|source| ControllerError::Checkpoint { source })?;
         let store = Arc::new(store);
-        let (status, checkpoint, initial_failure) = match store.load_and_normalize(&config.deployment) {
+        let (status, checkpoint, initial_failure) = match store
+            .load_and_normalize(&config.deployment)
+        {
             Ok(None) => (CampaignStatus::Idle, None, None),
-            Ok(Some(checkpoint)) => (
-                status_from_checkpoint(&checkpoint),
-                Some(checkpoint),
-                None,
-            ),
+            Ok(Some(checkpoint)) => (status_from_checkpoint(&checkpoint), Some(checkpoint), None),
             Err(error) => {
                 let failure = bounded_failure(CampaignFailureKind::Checkpoint, &error);
                 (
@@ -51,7 +50,7 @@ impl CampaignController {
         let (events_tx, _) = tokio::sync::broadcast::channel(EVENT_CAPACITY);
         let (report_tx, report_rx) = tokio::sync::mpsc::channel(1);
         let actor_events = events_tx.clone();
-        let actor = tokio::spawn(run_controller_actor(
+        let actor = tokio::spawn(run_controller_actor(ControllerActor {
             config,
             store,
             guard,
@@ -59,10 +58,10 @@ impl CampaignController {
             checkpoint,
             initial_failure,
             status_tx,
-            actor_events,
+            events_tx: actor_events,
             report_tx,
             request_rx,
-        ));
+        }));
         Ok(Self {
             request_tx,
             status_rx,

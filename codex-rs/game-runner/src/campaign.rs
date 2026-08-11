@@ -33,7 +33,7 @@ pub struct CampaignRun {
 
 pub(crate) enum CampaignStart {
     Fresh { target_app: String },
-    Resumed { checkpoint: CampaignCheckpoint },
+    Resumed { checkpoint: Box<CampaignCheckpoint> },
 }
 
 pub(crate) enum CampaignExecutionContext {
@@ -87,10 +87,7 @@ pub(crate) struct SafeBoundary {
 }
 
 impl SafeBoundary {
-    pub(crate) fn begin_game_call(
-        &mut self,
-        call_id: String,
-    ) -> Result<(), SafeBoundaryError> {
+    pub(crate) fn begin_game_call(&mut self, call_id: String) -> Result<(), SafeBoundaryError> {
         if self.active_call_id.is_some() {
             return Err(SafeBoundaryError::ActiveCallAlreadyTracked);
         }

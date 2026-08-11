@@ -7,8 +7,8 @@ use crate::CHECKPOINT_VERSION;
 use crate::CampaignCheckpoint;
 use crate::CampaignCheckpointStore;
 use crate::CampaignCommand;
-use crate::CampaignExecutionContext;
 use crate::CampaignEvent;
+use crate::CampaignExecutionContext;
 use crate::CampaignExit;
 use crate::CampaignFailure;
 use crate::CampaignFailureKind;
@@ -21,22 +21,22 @@ use crate::CampaignStoreGuard;
 use crate::CampaignSummary;
 use crate::CampaignTools;
 use crate::CheckpointDeployment;
-use crate::DurableCampaignState;
-use crate::PauseReason;
-use crate::DecisionGate;
 use crate::DecisionAudit;
+use crate::DecisionGate;
+use crate::DurableCampaignState;
 use crate::GameCallPolicy;
 use crate::GameToolFailureSignal;
 use crate::HelperLauncher;
 use crate::OwnerLeaseState;
+use crate::PauseReason;
 use crate::PolicyAudit;
 use crate::ReadinessLimits;
 use crate::RunnerError;
 use crate::RunnerRuntime;
 use crate::ShutdownMode;
 use crate::WorkerCommand;
-use crate::controller_types::ControllerDirective;
 use crate::controller_types::ControllerConfig;
+use crate::controller_types::ControllerDirective;
 use crate::controller_types::ControllerError;
 use crate::controller_types::ControllerRequest;
 use crate::controller_types::ControllerStatusEvent;
@@ -74,21 +74,35 @@ struct ActiveCampaign {
 enum ActorInput {
     Request(Option<ControllerRequest>),
     Failure(Option<GameToolFailureSignal>),
-    Worker(Result<WorkerCompletion, tokio::task::JoinError>),
+    Worker(Box<Result<WorkerCompletion, tokio::task::JoinError>>),
 }
 
-async fn run_controller_actor(
+struct ControllerActor {
     config: ControllerConfig,
     store: Arc<CampaignCheckpointStore>,
-    _guard: CampaignStoreGuard,
-    mut status: CampaignStatus,
-    mut checkpoint: Option<CampaignCheckpoint>,
+    guard: CampaignStoreGuard,
+    status: CampaignStatus,
+    checkpoint: Option<CampaignCheckpoint>,
     initial_failure: Option<CampaignFailure>,
     status_tx: tokio::sync::watch::Sender<CampaignStatus>,
     events_tx: tokio::sync::broadcast::Sender<CampaignEvent>,
     report_tx: tokio::sync::mpsc::Sender<Result<CampaignReport, ControllerError>>,
-    mut request_rx: tokio::sync::mpsc::Receiver<ControllerRequest>,
-) -> Result<(), ControllerError> {
+    request_rx: tokio::sync::mpsc::Receiver<ControllerRequest>,
+}
+
+async fn run_controller_actor(actor: ControllerActor) -> Result<(), ControllerError> {
+    let ControllerActor {
+        config,
+        store,
+        guard: _guard,
+        mut status,
+        mut checkpoint,
+        initial_failure,
+        status_tx,
+        events_tx,
+        report_tx,
+        mut request_rx,
+    } = actor;
     let _ = events_tx.send(CampaignEvent::StatusChanged(status.clone()));
     if let Some(failure) = initial_failure {
         let _ = events_tx.send(CampaignEvent::Failure(failure));
@@ -101,7 +115,7 @@ async fn run_controller_actor(
                 failure = active.failure_rx.recv(), if !active.failures_closed => {
                     ActorInput::Failure(failure)
                 }
-                completion = &mut active.worker => ActorInput::Worker(completion),
+                completion = &mut active.worker => ActorInput::Worker(Box::new(completion)),
             },
             None => ActorInput::Request(request_rx.recv().await),
         };
@@ -137,22 +151,16 @@ async fn run_controller_actor(
                     }
                 };
                 match directive {
-                    ControllerDirective::BeginStart => {
-                        match start_fresh_campaign(
-                            &config,
-                            Arc::clone(&store),
-                            events_tx.clone(),
-                        )
-                        .await
+                    ControllerDirective::Start => {
+                        match start_fresh_campaign(&config, Arc::clone(&store), events_tx.clone())
+                            .await
                         {
                             Ok((started, installed)) => {
                                 checkpoint = Some(installed);
                                 active = Some(started);
                                 update_status(
                                     &mut status,
-                                    ControllerStatusEvent::StartCommitted {
-                                        attempt_number: 1,
-                                    },
+                                    ControllerStatusEvent::StartCommitted { attempt_number: 1 },
                                     &status_tx,
                                     &events_tx,
                                 )?;
@@ -163,9 +171,9 @@ async fn run_controller_actor(
                             }
                         }
                     }
-                    ControllerDirective::BeginPause | ControllerDirective::BeginStop => {
+                    ControllerDirective::Pause | ControllerDirective::Stop => {
                         let Some(active_campaign) = active.as_mut() else {
-                            if directive == ControllerDirective::BeginStop {
+                            if directive == ControllerDirective::Stop {
                                 update_status(
                                     &mut status,
                                     ControllerStatusEvent::StopStarted,
@@ -194,13 +202,13 @@ async fn run_controller_actor(
                             continue;
                         };
                         let (worker_command, status_event) = match directive {
-                            ControllerDirective::BeginPause => {
+                            ControllerDirective::Pause => {
                                 (WorkerCommand::Pause, ControllerStatusEvent::PauseStarted)
                             }
-                            ControllerDirective::BeginStop => {
+                            ControllerDirective::Stop => {
                                 (WorkerCommand::Stop, ControllerStatusEvent::StopStarted)
                             }
-                            ControllerDirective::BeginStart | ControllerDirective::BeginResume => {
+                            ControllerDirective::Start | ControllerDirective::Resume => {
                                 unreachable!("directive arm is restricted to pause or stop")
                             }
                         };
@@ -211,14 +219,9 @@ async fn run_controller_actor(
                             .await
                             .map_err(|_| ControllerError::ActorClosed)?;
                         active_campaign.pending = Some(PendingCommand { response });
-                        update_status(
-                            &mut status,
-                            status_event,
-                            &status_tx,
-                            &events_tx,
-                        )?;
+                        update_status(&mut status, status_event, &status_tx, &events_tx)?;
                     }
-                    ControllerDirective::BeginResume => {
+                    ControllerDirective::Resume => {
                         let Some(existing) = checkpoint.clone() else {
                             let _ = response.send(Err(ControllerError::ActorClosed));
                             continue;
@@ -250,8 +253,7 @@ async fn run_controller_actor(
                                 let _ = response.send(Ok(status.clone()));
                             }
                             Err(error) => {
-                                let failure =
-                                    bounded_failure(CampaignFailureKind::Runtime, &error);
+                                let failure = bounded_failure(CampaignFailureKind::Runtime, &error);
                                 let _ = events_tx.send(CampaignEvent::Failure(failure.clone()));
                                 update_status(
                                     &mut status,
@@ -298,7 +300,7 @@ async fn run_controller_actor(
             }
             ActorInput::Worker(completion) => {
                 let mut finished = active.take().ok_or(ControllerError::ActorClosed)?;
-                let completion = completion.map_err(|_| ControllerError::ActorClosed)?;
+                let completion = (*completion).map_err(|_| ControllerError::ActorClosed)?;
                 let pending = finished.pending.take();
                 let mut recovery_checkpoint_installed = false;
                 let result = match completion {
@@ -307,14 +309,16 @@ async fn run_controller_actor(
                         runtime,
                     } => {
                         match controller_recovery::finish_recovery_exit(
-                            &config,
-                            Arc::clone(&store),
                             runtime,
-                            Arc::clone(&finished.persistence),
-                            &mut status,
-                            &status_tx,
-                            &events_tx,
-                            &report_tx,
+                            controller_recovery::RecoveryExitContext {
+                                config: &config,
+                                store: Arc::clone(&store),
+                                persistence: Arc::clone(&finished.persistence),
+                                status: &mut status,
+                                status_tx: &status_tx,
+                                events_tx: &events_tx,
+                                report_tx: &report_tx,
+                            },
                         )
                         .await
                         {

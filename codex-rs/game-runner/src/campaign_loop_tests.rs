@@ -16,8 +16,8 @@ use crate::AcceptedPlan;
 use crate::CampaignEvent;
 use crate::CampaignLimits;
 use crate::CampaignPersistence;
-use crate::CampaignSummary;
 use crate::CampaignStart;
+use crate::CampaignSummary;
 use crate::CampaignTerminalState;
 use crate::ClickArguments;
 use crate::DecisionGate;
@@ -36,14 +36,18 @@ use crate::campaign::CampaignDirective;
 use crate::campaign::ContinuationReason;
 use crate::campaign_persistence::tests::checkpoint;
 use crate::campaign_persistence::tests::store;
+use crate::campaign_prompt::ResumePromptContext;
 use crate::campaign_prompt::initial_prompt;
 use crate::campaign_prompt::resume_prompt;
-use crate::campaign_prompt::ResumePromptContext;
 
 #[derive(Debug, PartialEq, Eq)]
 enum DurableOperation {
     Persist,
-    Publish(CampaignEvent),
+    Publish(Box<CampaignEvent>),
+}
+
+fn published(event: CampaignEvent) -> DurableOperation {
+    DurableOperation::Publish(Box::new(event))
 }
 
 #[test]
@@ -94,10 +98,7 @@ async fn failed_game_tool_waits_for_the_controller_directive() -> anyhow::Result
         },
     };
     let controller = tokio::spawn(async move {
-        for directive in [
-            WorkerDirective::Continue,
-            WorkerDirective::PauseForRecovery,
-        ] {
+        for directive in [WorkerDirective::Continue, WorkerDirective::PauseForRecovery] {
             let signal = failure_rx.recv().await.expect("failure signal");
             assert_eq!(signal.tool, "click");
             assert_eq!(signal.summary, "socket disconnected");
@@ -144,7 +145,7 @@ fn fresh_and_resumed_starts_choose_the_correct_progress_and_prompt() -> anyhow::
     let mut restored_checkpoint = checkpoint();
     restored_checkpoint.summary.strategy = Some(strategy());
     let resumed = CampaignStart::Resumed {
-        checkpoint: restored_checkpoint.clone(),
+        checkpoint: Box::new(restored_checkpoint.clone()),
     };
     let (restored_progress, restored_prompt) = initialize_campaign_start(&resumed, limits)?;
     assert_eq!(restored_progress.summary(), restored_checkpoint.summary);
@@ -173,7 +174,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         commands: None,
         failures: None,
         start: CampaignStart::Resumed {
-            checkpoint: initial,
+            checkpoint: Box::new(initial),
         },
     };
     let gate = Arc::new(DecisionGate::new(1));
@@ -193,10 +194,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .record_progress(&running_summary, gate.as_ref(), &policy)
         .await
         .context("record progress")?;
-    operations.extend([
-        DurableOperation::Persist,
-        DurableOperation::Publish(event_rx.recv().await?),
-    ]);
+    operations.extend([DurableOperation::Persist, published(event_rx.recv().await?)]);
     assert_eq!(persistence.snapshot().await?.summary, running_summary);
 
     let plan = accepted_plan(gate.as_ref())?;
@@ -204,17 +202,14 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .record_plan(&running_summary, &plan, gate.as_ref(), &policy)
         .await
         .context("record plan")?;
-    operations.extend([
-        DurableOperation::Persist,
-        DurableOperation::Publish(event_rx.recv().await?),
-    ]);
-    assert_eq!(persistence.snapshot().await?.decision_audit, gate.snapshot().audit);
+    operations.extend([DurableOperation::Persist, published(event_rx.recv().await?)]);
+    assert_eq!(
+        persistence.snapshot().await?.decision_audit,
+        gate.snapshot().audit
+    );
 
-    let authorization = gate.prepare_mutation(
-        "click",
-        &json!({"x": 180, "y": 640}),
-        "mutation-1",
-    )?;
+    let authorization =
+        gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
     persistence
         .begin_mutation(&MutationCheckpointUpdate {
             authorization: authorization.clone(),
@@ -227,17 +222,14 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .record_mutation(&authorization, &policy)
         .await
         .context("record mutation authorization")?;
-    operations.push(DurableOperation::Publish(event_rx.recv().await?));
+    operations.push(published(event_rx.recv().await?));
 
     gate.record_mutation_result(&authorization.call_id, MutationResult::Success)?;
     context
         .record_mutation_finished(&authorization.call_id, MutationResult::Success, &policy)
         .await
         .context("record mutation result")?;
-    operations.extend([
-        DurableOperation::Persist,
-        DurableOperation::Publish(event_rx.recv().await?),
-    ]);
+    operations.extend([DurableOperation::Persist, published(event_rx.recv().await?)]);
 
     gate.begin_full_observation();
     gate.complete_full_observation(
@@ -251,10 +243,7 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .record_observation(&observation, &policy)
         .await
         .context("record observation")?;
-    operations.extend([
-        DurableOperation::Persist,
-        DurableOperation::Publish(event_rx.recv().await?),
-    ]);
+    operations.extend([DurableOperation::Persist, published(event_rx.recv().await?)]);
     assert_eq!(persistence.snapshot().await?.unresolved_mutation, None);
 
     let loss = ReportedOutcome {
@@ -286,8 +275,8 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         .context("record loss")?;
     operations.extend([
         DurableOperation::Persist,
-        DurableOperation::Publish(event_rx.recv().await?),
-        DurableOperation::Publish(event_rx.recv().await?),
+        published(event_rx.recv().await?),
+        published(event_rx.recv().await?),
     ]);
     assert_eq!(persistence.snapshot().await?.summary, loss_summary);
 
@@ -317,20 +306,20 @@ async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() 
         operations,
         vec![
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::Progress(running_summary.clone())),
+            published(CampaignEvent::Progress(running_summary.clone())),
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::Plan(plan)),
+            published(CampaignEvent::Plan(plan)),
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::Mutation(authorization)),
+            published(CampaignEvent::Mutation(authorization)),
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::MutationFinished(MutationResult::Success)),
+            published(CampaignEvent::MutationFinished(MutationResult::Success)),
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::Observation(
+            published(CampaignEvent::Observation(
                 gate.snapshot().observation.expect("observation")
             )),
             DurableOperation::Persist,
-            DurableOperation::Publish(CampaignEvent::Outcome(loss)),
-            DurableOperation::Publish(CampaignEvent::Progress(loss_summary)),
+            published(CampaignEvent::Outcome(loss)),
+            published(CampaignEvent::Progress(loss_summary)),
         ]
     );
     Ok(())
