@@ -25,6 +25,9 @@ max-threads = 4
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
 
+[test-groups.game_runner_integration]
+max-threads = 1
+
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
@@ -61,6 +64,17 @@ test-group = 'app_server_integration_local'
 # sensitive to Windows runner process-startup stalls when many cases launch at once.
 filter = 'package(codex-core) & kind(test) & test(apply_patch_cli)'
 test-group = 'core_apply_patch_cli_integration'
+
+[[profile.default.overrides]]
+# These tests run complete Codex/Code Mode/UDS paths against one-shot response
+# fixtures. Serialize the integration binaries so local resource contention
+# cannot consume a fixture before its owning campaign reaches it.
+filter = 'package(codex-game-runner) & kind(test)'
+test-group = 'game_runner_integration'
+
+[[profile.local.overrides]]
+filter = 'package(codex-game-runner) & kind(test)'
+test-group = 'game_runner_integration'
 
 [[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.
