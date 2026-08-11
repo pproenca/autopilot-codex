@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::CampaignTerminalState;
+use crate::DecisionAudit;
 use crate::DecisionSnapshot;
 use crate::OutcomeDraft;
 use crate::ReportedOutcome;
@@ -55,6 +56,10 @@ pub(crate) enum CampaignProgressError {
     MissingPendingInterrupt,
     #[error("turn id exceeds the 2048-byte limit")]
     TurnIdTooLarge,
+    #[error("restored campaign summary is inconsistent")]
+    InvalidRestoredSummary,
+    #[error("restored campaign strategy is invalid")]
+    InvalidRestoredStrategy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +108,47 @@ impl CampaignProgress {
             post_mutation_deadline: None,
             pending_interrupt: None,
         }
+    }
+
+    pub(crate) fn restore(
+        limits: CampaignLimits,
+        summary: CampaignSummary,
+        decision_audit: DecisionAudit,
+    ) -> Result<Self, CampaignProgressError> {
+        if summary.attempt_number == 0
+            || summary.losses.checked_add(1) != Some(summary.attempt_number)
+            || summary.losses > summary.total_turns
+            || summary.total_actions != decision_audit.mutation_authorizations
+            || summary.recent_turn_ids.len() > MAX_RECENT_TURNS
+            || summary.recent_turn_ids.len() as u64 > summary.total_turns
+            || summary
+                .recent_turn_ids
+                .iter()
+                .any(|turn_id| turn_id.len() > MAX_TURN_ID_BYTES)
+        {
+            return Err(CampaignProgressError::InvalidRestoredSummary);
+        }
+        if summary
+            .strategy
+            .as_ref()
+            .is_some_and(|strategy| strategy.validate().is_err())
+        {
+            return Err(CampaignProgressError::InvalidRestoredStrategy);
+        }
+        Ok(Self {
+            limits,
+            attempt_number: summary.attempt_number,
+            total_turns: summary.total_turns,
+            total_actions: summary.total_actions,
+            losses: summary.losses,
+            strategy: summary.strategy,
+            recent_turn_ids: summary.recent_turn_ids.into(),
+            last_action_audit: decision_audit.mutation_authorizations,
+            outcome_applied: false,
+            turn_deadline: Instant::now() + limits.turn_timeout,
+            post_mutation_deadline: None,
+            pending_interrupt: None,
+        })
     }
 
     pub(crate) fn on_turn_started(&mut self, turn_id: String) -> Result<(), CampaignProgressError> {

@@ -221,6 +221,38 @@ fn decision_counters_reject_overflow() {
 }
 
 #[test]
+fn restored_gate_keeps_audits_but_discards_all_authority() -> anyhow::Result<()> {
+    let audit = DecisionAudit {
+        plans_accepted: 6,
+        plan_rejections: 2,
+        mutation_attempts: 7,
+        mutation_authorizations: 5,
+        mutation_denials: 2,
+    };
+    let gate = DecisionGate::restore(
+        /*owner_generation*/ 2,
+        /*next_observation_generation*/ 9,
+        audit,
+    )?;
+
+    assert_eq!(
+        gate.snapshot(),
+        DecisionSnapshot {
+            owner_generation: 2,
+            next_observation_generation: 9,
+            observation: None,
+            plan: None,
+            mutation: None,
+            outcome: None,
+            requires_post_mutation_observation: false,
+            batch_actions: 0,
+            audit,
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn capture_attempt_and_positive_wait_invalidate_authority() -> anyhow::Result<()> {
     for invalidate in [
         InvalidationReason::CaptureStarted,

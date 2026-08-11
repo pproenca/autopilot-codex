@@ -250,3 +250,33 @@ fn deadlines_distinguish_post_mutation_turn_and_expected_interrupts() -> anyhow:
     );
     Ok(())
 }
+
+#[test]
+fn restored_progress_keeps_cumulative_summary_and_action_audit() -> anyhow::Result<()> {
+    let summary = CampaignSummary {
+        attempt_number: 3,
+        total_turns: 8,
+        total_actions: 5,
+        losses: 2,
+        strategy: Some(strategy("mobility")),
+        recent_turn_ids: vec!["turn-7".to_string(), "turn-8".to_string()],
+    };
+    let mut progress = CampaignProgress::restore(
+        limits(),
+        summary.clone(),
+        DecisionAudit {
+            plans_accepted: 6,
+            plan_rejections: 1,
+            mutation_attempts: 6,
+            mutation_authorizations: 5,
+            mutation_denials: 1,
+        },
+    )?;
+
+    assert_eq!(progress.summary(), summary);
+    let mut snapshot = empty_snapshot();
+    snapshot.audit.mutation_authorizations = 6;
+    progress.observe_snapshot(&snapshot, Instant::now())?;
+    assert_eq!(progress.summary().total_actions, 6);
+    Ok(())
+}

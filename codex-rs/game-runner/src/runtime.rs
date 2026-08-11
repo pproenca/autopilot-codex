@@ -6,6 +6,7 @@ use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_api::AuthManager;
 use codex_core_api::CodexAppsToolsCache;
 use codex_core_api::CodexThread;
+use codex_core_api::ClientMcpExtensions;
 use codex_core_api::Config;
 use codex_core_api::DynamicToolSpec;
 use codex_core_api::EnvironmentManager;
@@ -75,54 +76,10 @@ impl RunnerRuntime {
         dynamic_tools: Vec<DynamicToolSpec>,
         code_mode_host_program: Option<PathBuf>,
     ) -> Result<Self, RunnerError> {
-        let state_db = init_state_db(&config).await;
-        let auth_manager =
-            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-        let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-            config.codex_self_exe.clone(),
-            config.codex_linux_sandbox_exe.clone(),
-        )
-        .context("resolve local execution runtime")
-        .map_err(thread_startup_error)?;
-        let thread_store = thread_store_from_config(&config, state_db.clone());
-        let environment_manager = Arc::new(
-            EnvironmentManager::from_codex_home(
-                config.codex_home.clone(),
-                Some(local_runtime_paths),
-                config.http_client_factory(),
-            )
-            .await
-            .context("initialize environment manager")
-            .map_err(thread_startup_error)?,
-        );
-        let installation_id = resolve_installation_id(&config.codex_home)
-            .await
-            .context("resolve installation identity")
-            .map_err(thread_startup_error)?;
-        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-        extensions.mcp_tool_call_policy_contributor(policy);
-        let thread_manager = ThreadManager::new(
-            &config,
-            Arc::clone(&auth_manager),
-            build_models_manager(&config, auth_manager),
-            CodexAppsToolsCache::default(),
-            SessionSource::Custom("game_runner".to_string()),
-            environment_manager,
-            Arc::new(extensions.build()),
-            Arc::new(NoUserInstructions),
-            /*analytics_events_client*/ None,
-            Arc::clone(&thread_store),
-            local_agent_graph_store_from_state_db(state_db.as_ref()),
-            installation_id,
-            /*attestation_provider*/ None,
-            /*external_time_provider*/ None,
-        );
-        let thread_manager = match code_mode_host_program {
-            Some(program) => thread_manager.with_code_mode_session_provider(Arc::new(
-                ProcessOwnedCodeModeSessionProvider::with_host_program(program),
-            )),
-            None => thread_manager,
-        };
+        let RuntimeComponents {
+            thread_manager,
+            auth_manager: _,
+        } = build_runtime_components(&config, policy, code_mode_host_program).await?;
         let NewThread {
             thread_id,
             thread,
@@ -135,6 +92,81 @@ impl RunnerRuntime {
             .await
             .context("start game campaign thread")
             .map_err(thread_startup_error)?;
+        Ok(Self {
+            thread_manager,
+            thread_id,
+            thread,
+            session_configured,
+        })
+    }
+
+    pub async fn resume(
+        config: Config,
+        policy: Arc<GameCallPolicy>,
+        rollout_path: PathBuf,
+        expected_thread_id: ThreadId,
+    ) -> Result<Self, RunnerError> {
+        Self::resume_inner(
+            config,
+            policy,
+            rollout_path,
+            expected_thread_id,
+            None,
+        )
+        .await
+    }
+
+    pub async fn resume_with_code_mode_host(
+        config: Config,
+        policy: Arc<GameCallPolicy>,
+        rollout_path: PathBuf,
+        expected_thread_id: ThreadId,
+        code_mode_host_program: PathBuf,
+    ) -> Result<Self, RunnerError> {
+        Self::resume_inner(
+            config,
+            policy,
+            rollout_path,
+            expected_thread_id,
+            Some(code_mode_host_program),
+        )
+        .await
+    }
+
+    async fn resume_inner(
+        config: Config,
+        policy: Arc<GameCallPolicy>,
+        rollout_path: PathBuf,
+        expected_thread_id: ThreadId,
+        code_mode_host_program: Option<PathBuf>,
+    ) -> Result<Self, RunnerError> {
+        let RuntimeComponents {
+            thread_manager,
+            auth_manager,
+        } = build_runtime_components(&config, policy, code_mode_host_program).await?;
+        let NewThread {
+            thread_id,
+            thread,
+            session_configured,
+        } = thread_manager
+            .resume_thread_from_rollout(
+                config,
+                rollout_path,
+                auth_manager,
+                /*parent_trace*/ None,
+                ClientMcpExtensions::default(),
+            )
+            .await
+            .context("resume game campaign thread")
+            .map_err(thread_startup_error)?;
+        if thread_id != expected_thread_id {
+            let actual_thread_id = thread_id;
+            let _ = thread.shutdown_and_wait().await;
+            let _ = thread_manager.remove_thread(&actual_thread_id).await;
+            return Err(thread_startup_error(anyhow::anyhow!(
+                "resumed thread id {actual_thread_id} does not match checkpoint {expected_thread_id}"
+            )));
+        }
         Ok(Self {
             thread_manager,
             thread_id,
@@ -158,6 +190,74 @@ impl RunnerRuntime {
     }
 }
 
+struct RuntimeComponents {
+    thread_manager: ThreadManager,
+    auth_manager: Arc<AuthManager>,
+}
+
+async fn build_runtime_components(
+    config: &Config,
+    policy: Arc<GameCallPolicy>,
+    code_mode_host_program: Option<PathBuf>,
+) -> Result<RuntimeComponents, RunnerError> {
+    let state_db = init_state_db(config).await;
+    let auth_manager =
+        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )
+    .context("resolve local execution runtime")
+    .map_err(thread_startup_error)?;
+    let thread_store = thread_store_from_config(config, state_db.clone());
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_codex_home(
+            config.codex_home.clone(),
+            Some(local_runtime_paths),
+            config.http_client_factory(),
+        )
+        .await
+        .context("initialize environment manager")
+        .map_err(thread_startup_error)?,
+    );
+    let installation_id = resolve_installation_id(&config.codex_home)
+        .await
+        .context("resolve installation identity")
+        .map_err(thread_startup_error)?;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.mcp_tool_call_policy_contributor(policy);
+    let thread_manager = ThreadManager::new(
+        config,
+        Arc::clone(&auth_manager),
+        build_models_manager(config, Arc::clone(&auth_manager)),
+        CodexAppsToolsCache::default(),
+        SessionSource::Custom("game_runner".to_string()),
+        environment_manager,
+        Arc::new(extensions.build()),
+        Arc::new(NoUserInstructions),
+        /*analytics_events_client*/ None,
+        Arc::clone(&thread_store),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
+        installation_id,
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+    let thread_manager = match code_mode_host_program {
+        Some(program) => thread_manager.with_code_mode_session_provider(Arc::new(
+            ProcessOwnedCodeModeSessionProvider::with_host_program(program),
+        )),
+        None => thread_manager,
+    };
+    Ok(RuntimeComponents {
+        thread_manager,
+        auth_manager,
+    })
+}
+
 fn thread_startup_error(source: anyhow::Error) -> RunnerError {
     RunnerError::ThreadStartup { source }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

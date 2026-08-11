@@ -113,6 +113,7 @@ pub use codex_protocol::dynamic_tools::DynamicToolResponse;
 pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 pub use codex_protocol::error::Result as CodexResult;
 pub use codex_protocol::mcp::CallToolResult;
+pub use codex_protocol::mcp::ClientMcpExtensions;
 pub use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::openai_models::ModelPreset;
 pub use codex_protocol::openai_models::ReasoningEffort;

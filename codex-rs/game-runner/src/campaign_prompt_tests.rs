@@ -3,6 +3,11 @@ use pretty_assertions::assert_eq;
 use super::continuation_prompt;
 use super::initial_prompt;
 use super::new_attempt_prompt;
+use super::resume_prompt;
+use super::ResumePromptContext;
+use crate::DurableMutation;
+use crate::DurableMutationResult;
+use crate::StrategyRecord;
 
 #[test]
 fn initial_prompt_requires_pixel_planning_batches_losses_and_victory() {
@@ -40,4 +45,39 @@ fn continuation_prompts_are_short_and_attempt_specific() {
             "plan plus one fresh post-mutation observation for every action."
         )
     );
+}
+
+#[test]
+fn resume_prompt_injects_strategy_and_indeterminate_operation_once() -> anyhow::Result<()> {
+    let strategy = StrategyRecord {
+        summary: "Build mobility before the boss".to_string(),
+        confirmed_mechanics: vec!["Shops precede bosses".to_string()],
+        failed_approaches: vec!["Early all-in".to_string()],
+        shop_and_boss_notes: vec!["Keep one reroll".to_string()],
+        next_attempt_priorities: vec!["Buy mobility".to_string()],
+    };
+    let mutation = DurableMutation {
+        action_sequence: 3,
+        operation_id: "operation-3".to_string(),
+        action_sha256: "a".repeat(64),
+        tool: "click".to_string(),
+        result: DurableMutationResult::Indeterminate,
+    };
+
+    let prompt = resume_prompt(ResumePromptContext {
+        attempt_number: 2,
+        strategy: Some(&strategy),
+        unresolved_mutation: Some(&mutation),
+    })?;
+
+    assert_eq!(prompt.matches("Build mobility before the boss").count(), 1);
+    assert_eq!(prompt.matches("operation-3").count(), 1);
+    assert_eq!(prompt.matches(&"a".repeat(64)).count(), 1);
+    assert_eq!(prompt.matches("indeterminate").count(), 1);
+    assert!(prompt.contains("Capture fresh full-frame pixels before planning"));
+    assert!(prompt.contains("Never retry the unresolved operation"));
+    assert!(!prompt.contains("sha256:screenshot-from-rollout"));
+    assert!(!prompt.contains("prior private plan prose"));
+    assert!(!prompt.contains("prior tool output"));
+    Ok(())
 }

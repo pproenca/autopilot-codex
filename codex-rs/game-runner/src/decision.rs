@@ -53,6 +53,8 @@ pub enum DecisionError {
     InvalidOutcome(#[from] OutcomeValidationError),
     #[error("counter {counter} overflowed")]
     CounterOverflow { counter: String },
+    #[error("restored decision counters are inconsistent")]
+    InvalidRestoredState,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -176,6 +178,41 @@ impl DecisionGate {
                 batch: ActionBatch::new(),
             }),
         }
+    }
+
+    pub fn restore(
+        owner_generation: u64,
+        next_observation_generation: u64,
+        audit: DecisionAudit,
+    ) -> Result<Self, DecisionError> {
+        if owner_generation == 0
+            || next_observation_generation == 0
+            || audit.mutation_authorizations > audit.mutation_attempts
+            || audit
+                .mutation_authorizations
+                .checked_add(audit.mutation_denials)
+                != Some(audit.mutation_attempts)
+            || audit.plans_accepted < audit.mutation_authorizations
+        {
+            return Err(DecisionError::InvalidRestoredState);
+        }
+        Ok(Self {
+            state: Mutex::new(DecisionState {
+                snapshot: DecisionSnapshot {
+                    owner_generation,
+                    next_observation_generation,
+                    observation: None,
+                    plan: None,
+                    mutation: None,
+                    outcome: None,
+                    requires_post_mutation_observation: false,
+                    batch_actions: 0,
+                    audit,
+                },
+                plan_sequence: audit.plans_accepted,
+                batch: ActionBatch::new(),
+            }),
+        })
     }
 
     pub fn begin_turn(&self) {
