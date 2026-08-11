@@ -22,6 +22,7 @@ mod planned_action;
 mod policy;
 mod runtime;
 mod strategy;
+mod worker_coordination;
 
 pub use action_batch::MAX_ACTIONS_PER_TURN;
 pub use campaign::CampaignRun;
@@ -30,6 +31,8 @@ pub(crate) use campaign::CampaignExecutionContext;
 pub(crate) use campaign::CampaignExit;
 pub(crate) use campaign::CampaignStart;
 pub(crate) use campaign::WorkerCommand;
+pub(crate) use worker_coordination::GameToolFailureSignal;
+pub(crate) use worker_coordination::WorkerDirective;
 pub use campaign_persistence::CampaignPersistence;
 pub use campaign_persistence::MutationCheckpointUpdate;
 pub use campaign_persistence::PersistenceError;
