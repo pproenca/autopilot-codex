@@ -202,6 +202,27 @@ impl CampaignPersistence {
         Ok(())
     }
 
+    pub async fn mark_unresolved_indeterminate(&self) -> Result<(), PersistenceError> {
+        let mut state = self.state.lock().await;
+        let mut candidate = state
+            .checkpoint
+            .clone()
+            .ok_or(PersistenceError::MissingCheckpoint)?;
+        let Some(mutation) = candidate.unresolved_mutation.as_mut() else {
+            state.active_call_id = None;
+            return Ok(());
+        };
+        if mutation.result == DurableMutationResult::Indeterminate {
+            state.active_call_id = None;
+            return Ok(());
+        }
+        mutation.result = DurableMutationResult::Indeterminate;
+        self.write_checkpoint(&candidate).await?;
+        state.checkpoint = Some(candidate);
+        state.active_call_id = None;
+        Ok(())
+    }
+
     pub async fn set_state(
         &self,
         durable_state: DurableCampaignState,

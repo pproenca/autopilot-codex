@@ -154,6 +154,11 @@ async fn mutation_protocol_persists_pending_result_and_confirming_observation() 
         DurableMutationResult::Success;
     assert_eq!(persistence.snapshot().await?, expected);
 
+    persistence.mark_unresolved_indeterminate().await?;
+    expected.unresolved_mutation.as_mut().expect("mutation").result =
+        DurableMutationResult::Indeterminate;
+    assert_eq!(persistence.snapshot().await?, expected);
+
     persistence
         .confirm_observation(&ObservationEvidence {
             generation: 2,
