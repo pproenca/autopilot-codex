@@ -184,7 +184,13 @@ impl CampaignPersistence {
         let confirms_action_sequence = candidate
             .unresolved_mutation
             .as_ref()
-            .map(|mutation| mutation.action_sequence);
+            .map(|mutation| mutation.action_sequence)
+            .or_else(|| {
+                candidate
+                    .latest_observation
+                    .as_ref()
+                    .and_then(|observation| observation.confirms_action_sequence)
+            });
         candidate.latest_observation = Some(crate::DurableObservation {
             observation_sequence: observation.generation,
             confirms_action_sequence,

@@ -1,89 +1,257 @@
-use std::time::Duration;
-use std::time::Instant;
+use std::sync::Arc;
 
-use codex_core_api::CallToolResult;
-use codex_core_api::McpInvocation;
-use codex_core_api::McpToolCallEndEvent;
+use anyhow::Context;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::sync::broadcast::error::TryRecvError;
 
+use super::CampaignExecutionContext;
+use super::CampaignStart;
+use super::initialize_campaign_start;
+use crate::AcceptedPlan;
+use crate::CampaignEvent;
 use crate::CampaignLimits;
+use crate::CampaignPersistence;
+use crate::CampaignSummary;
 use crate::CampaignTerminalState;
 use crate::ClickArguments;
 use crate::DecisionGate;
+use crate::GameCallPolicy;
+use crate::MutationCheckpointUpdate;
 use crate::MutationResult;
-use crate::ObservationEvidence;
 use crate::OutcomeDraft;
 use crate::PlanCandidate;
 use crate::PlanDraft;
 use crate::PlannedAction;
 use crate::ReportedOutcome;
 use crate::StrategyRecord;
-use crate::campaign_progress::CampaignDirective;
-use crate::campaign_progress::CampaignProgress;
-use crate::campaign_progress::ContinuationReason;
+use crate::campaign::CampaignDirective;
+use crate::campaign_persistence::tests::checkpoint;
+use crate::campaign_persistence::tests::store;
+use crate::campaign_prompt::initial_prompt;
+use crate::campaign_prompt::resume_prompt;
+use crate::campaign_prompt::ResumePromptContext;
 
-use super::observe_game_call_end;
-use super::reduce_accepted_outcome;
-use super::reduce_turn_aborted;
-use super::reduce_turn_complete;
-
-fn limits() -> CampaignLimits {
-    CampaignLimits {
-        turn_timeout: Duration::from_secs(15 * 60),
-        post_mutation_timeout: Duration::from_secs(5 * 60),
-        interrupt_timeout: Duration::from_secs(30),
-    }
+#[derive(Debug, PartialEq, Eq)]
+enum DurableOperation {
+    Persist,
+    Publish(CampaignEvent),
 }
 
-fn reported_outcome(draft: OutcomeDraft) -> ReportedOutcome {
-    ReportedOutcome {
-        observation: ObservationEvidence {
-            generation: 2,
-            call_id: "capture-after".to_string(),
-            reference: draft.observation_reference().to_string(),
-            width: 1051,
-            height: 820,
+#[test]
+fn fresh_and_resumed_starts_choose_the_correct_progress_and_prompt() -> anyhow::Result<()> {
+    let limits = CampaignLimits::stage_4b1();
+    let fresh = CampaignStart::Fresh {
+        target_app: "Difficult Game".to_string(),
+    };
+    let (fresh_progress, fresh_prompt) = initialize_campaign_start(&fresh, limits)?;
+    assert_eq!(
+        fresh_progress.summary(),
+        CampaignSummary {
+            attempt_number: 1,
+            total_turns: 0,
+            total_actions: 0,
+            losses: 0,
+            strategy: None,
+            recent_turn_ids: Vec::new(),
+        }
+    );
+    assert_eq!(fresh_prompt, initial_prompt("Difficult Game"));
+
+    let mut restored_checkpoint = checkpoint();
+    restored_checkpoint.summary.strategy = Some(strategy());
+    let resumed = CampaignStart::Resumed {
+        checkpoint: restored_checkpoint.clone(),
+    };
+    let (restored_progress, restored_prompt) = initialize_campaign_start(&resumed, limits)?;
+    assert_eq!(restored_progress.summary(), restored_checkpoint.summary);
+    assert_eq!(
+        restored_prompt,
+        resume_prompt(ResumePromptContext {
+            attempt_number: restored_checkpoint.summary.attempt_number,
+            strategy: restored_checkpoint.summary.strategy.as_ref(),
+            unresolved_mutation: restored_checkpoint.unresolved_mutation.as_ref(),
+        })?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn durable_activity_is_persisted_before_publication_and_win_is_deferred() -> anyhow::Result<()>
+{
+    let (_codex_home, store, _guard) = store()?;
+    let persistence = Arc::new(CampaignPersistence::empty(store));
+    let initial = checkpoint();
+    persistence.install(initial.clone()).await?;
+    let (events, mut event_rx) = tokio::sync::broadcast::channel(16);
+    let context = CampaignExecutionContext::Durable {
+        persistence: Arc::clone(&persistence),
+        events,
+        start: CampaignStart::Resumed {
+            checkpoint: initial,
         },
-        draft,
-    }
-}
+    };
+    let gate = Arc::new(DecisionGate::new(1));
+    let policy = GameCallPolicy::new(
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        1,
+        Arc::clone(&gate),
+    );
+    let mut operations = Vec::new();
 
-fn tool_end(tool: &str, result: Result<CallToolResult, String>) -> McpToolCallEndEvent {
-    McpToolCallEndEvent {
-        call_id: if tool == "get_app_state" {
-            "capture-1".to_string()
-        } else {
-            "mutation-1".to_string()
+    let running_summary = CampaignSummary {
+        total_turns: 2,
+        recent_turn_ids: vec!["turn-1".to_string(), "turn-2".to_string()],
+        ..summary(/*attempt_number*/ 1, /*losses*/ 0)
+    };
+    context
+        .record_progress(&running_summary, gate.as_ref(), &policy)
+        .await
+        .context("record progress")?;
+    operations.extend([
+        DurableOperation::Persist,
+        DurableOperation::Publish(event_rx.recv().await?),
+    ]);
+    assert_eq!(persistence.snapshot().await?.summary, running_summary);
+
+    let plan = accepted_plan(gate.as_ref())?;
+    context
+        .record_plan(&running_summary, &plan, gate.as_ref(), &policy)
+        .await
+        .context("record plan")?;
+    operations.extend([
+        DurableOperation::Persist,
+        DurableOperation::Publish(event_rx.recv().await?),
+    ]);
+    assert_eq!(persistence.snapshot().await?.decision_audit, gate.snapshot().audit);
+
+    let authorization = gate.prepare_mutation(
+        "click",
+        &json!({"x": 180, "y": 640}),
+        "mutation-1",
+    )?;
+    persistence
+        .begin_mutation(&MutationCheckpointUpdate {
+            authorization: authorization.clone(),
+            decision_audit: gate.snapshot().audit,
+            policy_audit: policy.audit(),
+        })
+        .await?;
+    operations.push(DurableOperation::Persist);
+    context
+        .record_mutation(&authorization, &policy)
+        .await
+        .context("record mutation authorization")?;
+    operations.push(DurableOperation::Publish(event_rx.recv().await?));
+
+    gate.record_mutation_result(&authorization.call_id, MutationResult::Success)?;
+    context
+        .record_mutation_finished(&authorization.call_id, MutationResult::Success, &policy)
+        .await
+        .context("record mutation result")?;
+    operations.extend([
+        DurableOperation::Persist,
+        DurableOperation::Publish(event_rx.recv().await?),
+    ]);
+
+    gate.begin_full_observation();
+    gate.complete_full_observation(
+        "capture-after".to_string(),
+        "sha256:after".to_string(),
+        /*width*/ 1051,
+        /*height*/ 820,
+    )?;
+    let observation = gate.snapshot().observation.expect("fresh observation");
+    context
+        .record_observation(&observation, &policy)
+        .await
+        .context("record observation")?;
+    operations.extend([
+        DurableOperation::Persist,
+        DurableOperation::Publish(event_rx.recv().await?),
+    ]);
+    assert_eq!(persistence.snapshot().await?.unresolved_mutation, None);
+
+    let loss = ReportedOutcome {
+        observation: observation.clone(),
+        draft: OutcomeDraft::Loss {
+            observation_reference: observation.reference.clone(),
+            visible_evidence_summary: "The loss screen is visible".to_string(),
+            lesson: "The build lacked mobility".to_string(),
+            strategy: strategy(),
         },
-        invocation: McpInvocation {
-            server: "game".to_string(),
-            tool: tool.to_string(),
-            arguments: Some(json!({})),
+    };
+    let loss_summary = CampaignSummary {
+        attempt_number: 2,
+        total_turns: 2,
+        total_actions: 1,
+        losses: 1,
+        strategy: Some(strategy()),
+        recent_turn_ids: running_summary.recent_turn_ids.clone(),
+    };
+    context
+        .record_outcome(
+            &loss_summary,
+            &loss,
+            &CampaignDirective::InterruptThenContinue(super::ContinuationReason::NewAttempt),
+            gate.as_ref(),
+            &policy,
+        )
+        .await
+        .context("record loss")?;
+    operations.extend([
+        DurableOperation::Persist,
+        DurableOperation::Publish(event_rx.recv().await?),
+        DurableOperation::Publish(event_rx.recv().await?),
+    ]);
+    assert_eq!(persistence.snapshot().await?.summary, loss_summary);
+
+    let win = ReportedOutcome {
+        observation,
+        draft: OutcomeDraft::Win {
+            observation_reference: "sha256:after".to_string(),
+            visible_evidence_summary: "The full victory screen is visible".to_string(),
+            lesson: "The boss is defeated".to_string(),
         },
-        connector_id: None,
-        mcp_app_resource_uri: None,
-        link_id: None,
-        app_name: None,
-        action_name: None,
-        plugin_id: None,
-        read_only_hint: None,
-        duration: Duration::from_millis(5),
-        result,
-    }
+    };
+    let before_win = persistence.snapshot().await?;
+    context
+        .record_outcome(
+            &loss_summary,
+            &win,
+            &CampaignDirective::Complete(CampaignTerminalState::Won),
+            gate.as_ref(),
+            &policy,
+        )
+        .await
+        .context("defer win")?;
+    assert_eq!(persistence.snapshot().await?, before_win);
+    assert_eq!(event_rx.try_recv(), Err(TryRecvError::Empty));
+
+    assert_eq!(
+        operations,
+        vec![
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::Progress(running_summary.clone())),
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::Plan(plan)),
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::Mutation(authorization)),
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::MutationFinished(MutationResult::Success)),
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::Observation(
+                gate.snapshot().observation.expect("observation")
+            )),
+            DurableOperation::Persist,
+            DurableOperation::Publish(CampaignEvent::Outcome(loss)),
+            DurableOperation::Publish(CampaignEvent::Progress(loss_summary)),
+        ]
+    );
+    Ok(())
 }
 
-fn call_result(content: serde_json::Value, is_error: bool) -> CallToolResult {
-    CallToolResult {
-        content: Vec::new(),
-        structured_content: Some(content),
-        is_error: Some(is_error),
-        meta: None,
-    }
-}
-
-fn authorized_gate() -> anyhow::Result<DecisionGate> {
-    let gate = DecisionGate::new(1);
+fn accepted_plan(gate: &DecisionGate) -> anyhow::Result<AcceptedPlan> {
     gate.begin_full_observation();
     gate.complete_full_observation(
         "capture-before".to_string(),
@@ -114,137 +282,27 @@ fn authorized_gate() -> anyhow::Result<DecisionGate> {
         reason: "Reversible".to_string(),
         expected_visible_result: "A safe screen".to_string(),
         invalidation_condition: "The menu changes".to_string(),
-    })?;
-    gate.prepare_mutation("click", &json!({"x": 180, "y": 640}), "mutation-1")?;
-    Ok(gate)
+    })
+    .map_err(Into::into)
 }
 
-#[test]
-fn game_call_reducer_installs_only_complete_full_frame_evidence() -> anyhow::Result<()> {
-    let gate = DecisionGate::new(1);
-    gate.begin_full_observation();
-    observe_game_call_end(
-        &gate,
-        &tool_end(
-            "get_app_state",
-            Ok(call_result(
-                json!({"artifact_uri": "sha256:after", "width": 1051, "height": 820}),
-                false,
-            )),
-        ),
-    )?;
-    assert_eq!(
-        gate.snapshot().observation,
-        Some(ObservationEvidence {
-            generation: 1,
-            call_id: "capture-1".to_string(),
-            reference: "sha256:after".to_string(),
-            width: 1051,
-            height: 820,
-        })
-    );
-
-    gate.begin_full_observation();
-    observe_game_call_end(
-        &gate,
-        &tool_end(
-            "get_app_state",
-            Ok(call_result(
-                json!({"artifact_uri": "sha256:incomplete", "width": 1051}),
-                false,
-            )),
-        ),
-    )?;
-    assert_eq!(gate.snapshot().observation, None);
-    Ok(())
-}
-
-#[test]
-fn game_call_reducer_classifies_authorized_mutation_results() -> anyhow::Result<()> {
-    for (result, expected) in [
-        (
-            Ok(call_result(json!({"clicked": true}), false)),
-            MutationResult::Success,
-        ),
-        (
-            Ok(call_result(json!({"clicked": false}), true)),
-            MutationResult::CleanFailure,
-        ),
-        (
-            Err("connection closed".to_string()),
-            MutationResult::Indeterminate,
-        ),
-    ] {
-        let gate = authorized_gate()?;
-        observe_game_call_end(&gate, &tool_end("click", result))?;
-        assert_eq!(
-            gate.snapshot()
-                .mutation
-                .and_then(|mutation| mutation.result),
-            Some(expected)
-        );
+fn summary(attempt_number: u64, losses: u64) -> CampaignSummary {
+    CampaignSummary {
+        attempt_number,
+        total_turns: 1,
+        total_actions: 0,
+        losses,
+        strategy: None,
+        recent_turn_ids: vec!["turn-1".to_string()],
     }
-    Ok(())
 }
 
-#[test]
-fn turn_reducers_continue_normally_and_only_accept_expected_aborts() -> anyhow::Result<()> {
-    let gate = DecisionGate::new(1);
-    let mut progress = CampaignProgress::new(limits());
-    assert_eq!(
-        reduce_turn_complete(&mut progress, &gate.snapshot())?,
-        CampaignDirective::SubmitContinuation(ContinuationReason::Ordinary)
-    );
-    assert!(matches!(
-        reduce_turn_aborted(&mut progress)?,
-        CampaignDirective::Block(_)
-    ));
-
-    progress.begin_interrupt(ContinuationReason::NewAttempt, Instant::now())?;
-    assert_eq!(
-        reduce_turn_aborted(&mut progress)?,
-        CampaignDirective::SubmitContinuation(ContinuationReason::NewAttempt)
-    );
-    Ok(())
-}
-
-#[test]
-fn accepted_outcomes_continue_losses_but_finish_campaign_terminals() -> anyhow::Result<()> {
-    let loss = reported_outcome(OutcomeDraft::Loss {
-        observation_reference: "sha256:loss".to_string(),
-        visible_evidence_summary: "The loss screen is visible".to_string(),
-        lesson: "The build lacked mobility".to_string(),
-        strategy: StrategyRecord {
-            summary: "Prioritize mobility".to_string(),
-            confirmed_mechanics: Vec::new(),
-            failed_approaches: vec!["Static defense".to_string()],
-            shop_and_boss_notes: Vec::new(),
-            next_attempt_priorities: vec!["Buy movement".to_string()],
-        },
-    });
-    assert_eq!(
-        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &loss)?,
-        CampaignDirective::InterruptThenContinue(ContinuationReason::NewAttempt)
-    );
-
-    let win = reported_outcome(OutcomeDraft::Win {
-        observation_reference: "sha256:win".to_string(),
-        visible_evidence_summary: "The victory screen is visible".to_string(),
-        lesson: "The boss is defeated".to_string(),
-    });
-    assert_eq!(
-        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &win)?,
-        CampaignDirective::Complete(CampaignTerminalState::Won)
-    );
-
-    let terminal_block = reported_outcome(OutcomeDraft::TerminalBlock {
-        observation_reference: "sha256:block".to_string(),
-        visible_evidence_summary: "The helper disconnected".to_string(),
-        lesson: "Physical state is unresolved".to_string(),
-    });
-    assert_eq!(
-        reduce_accepted_outcome(&mut CampaignProgress::new(limits()), &terminal_block,)?,
-        CampaignDirective::Block("The helper disconnected".to_string())
-    );
-    Ok(())
+fn strategy() -> StrategyRecord {
+    StrategyRecord {
+        summary: "Prioritize mobility".to_string(),
+        confirmed_mechanics: vec!["Shops precede bosses".to_string()],
+        failed_approaches: vec!["Static defense".to_string()],
+        shop_and_boss_notes: vec!["Keep one reroll".to_string()],
+        next_attempt_priorities: vec!["Buy movement".to_string()],
+    }
 }

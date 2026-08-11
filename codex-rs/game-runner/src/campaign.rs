@@ -1,4 +1,11 @@
+use std::sync::Arc;
+
 use serde::Serialize;
+
+use crate::CampaignCheckpoint;
+use crate::CampaignEvent;
+use crate::CampaignPersistence;
+use crate::CampaignReport;
 
 pub(crate) use crate::campaign_progress::CampaignDirective;
 pub(crate) use crate::campaign_progress::CampaignProgress;
@@ -24,6 +31,29 @@ pub struct CampaignRun {
     limits: crate::campaign_progress::CampaignLimits,
 }
 
+pub(crate) enum CampaignStart {
+    Fresh { target_app: String },
+    Resumed { checkpoint: CampaignCheckpoint },
+}
+
+pub(crate) enum CampaignExecutionContext {
+    Ephemeral {
+        start: CampaignStart,
+    },
+    Durable {
+        persistence: Arc<CampaignPersistence>,
+        events: tokio::sync::broadcast::Sender<CampaignEvent>,
+        start: CampaignStart,
+    },
+}
+
+pub(crate) enum CampaignExit {
+    VerifiedWin(CampaignReport),
+    Paused,
+    Stopped,
+    Blocked(CampaignReport),
+}
+
 impl CampaignRun {
     pub fn new(limits: crate::campaign_progress::CampaignLimits) -> Self {
         Self { limits }
@@ -32,6 +62,9 @@ impl CampaignRun {
 
 #[path = "campaign_loop.rs"]
 mod campaign_loop;
+
+#[path = "campaign_event.rs"]
+mod campaign_event;
 
 #[cfg(test)]
 #[path = "campaign_tests.rs"]

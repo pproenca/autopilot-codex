@@ -3,30 +3,35 @@ use std::time::Instant;
 
 use codex_core_api::CodexThread;
 use codex_core_api::EventMsg;
-use codex_core_api::McpToolCallEndEvent;
 use codex_core_api::Op;
 use codex_core_api::SessionConfiguredEvent;
 use codex_core_api::UserInput;
 
 use super::CampaignDirective;
+use super::CampaignExecutionContext;
+use super::CampaignExit;
 use super::CampaignProgress;
 use super::CampaignRun;
+use super::CampaignStart;
 use super::CampaignTerminalState;
 use super::ContinuationReason;
+use super::campaign_event::begin_safe_interrupt;
+use super::campaign_event::block_exit as block_report;
+use super::campaign_event::build_exit as build_report;
+use super::campaign_event::initialize_campaign_start;
+use super::campaign_event::observe_game_call_end;
+use super::campaign_event::reduce_accepted_outcome;
+use super::campaign_event::reduce_turn_aborted;
+use super::campaign_event::reduce_turn_complete;
 use crate::CampaignReport;
 use crate::CampaignTools;
 use crate::DecisionGate;
 use crate::GAME_SERVER_NAME;
 use crate::GameCallPolicy;
 use crate::InvalidationReason;
-use crate::MutationResult;
-use crate::ReportedOutcome;
 use crate::RunnerError;
-use crate::campaign_progress::CampaignProgressError;
 use crate::campaign_prompt::continuation_prompt;
-use crate::campaign_prompt::initial_prompt;
 use crate::campaign_prompt::new_attempt_prompt;
-use crate::campaign_report::CampaignReportContext;
 
 impl CampaignRun {
     pub async fn execute(
@@ -37,8 +42,36 @@ impl CampaignRun {
         gate: Arc<DecisionGate>,
         target_app: &str,
     ) -> Result<CampaignReport, RunnerError> {
-        let mut progress = CampaignProgress::new(self.limits);
-        submit_turn(thread, &gate, &initial_prompt(target_app)).await?;
+        match self
+            .execute_controlled(
+                thread,
+                session,
+                policy,
+                gate,
+                CampaignExecutionContext::Ephemeral {
+                    start: CampaignStart::Fresh {
+                        target_app: target_app.to_string(),
+                    },
+                },
+            )
+            .await?
+        {
+            CampaignExit::VerifiedWin(report) | CampaignExit::Blocked(report) => Ok(report),
+            CampaignExit::Paused => Err(campaign_submit_error("campaign paused")),
+            CampaignExit::Stopped => Err(campaign_submit_error("campaign stopped")),
+        }
+    }
+
+    pub(crate) async fn execute_controlled(
+        &self,
+        thread: &CodexThread,
+        session: &SessionConfiguredEvent,
+        policy: &GameCallPolicy,
+        gate: Arc<DecisionGate>,
+        context: CampaignExecutionContext,
+    ) -> Result<CampaignExit, RunnerError> {
+        let (mut progress, prompt) = initialize_campaign_start(context.start(), self.limits)?;
+        submit_turn(thread, &gate, &prompt).await?;
         let tools = CampaignTools::new(Arc::clone(&gate));
 
         loop {
@@ -96,13 +129,71 @@ impl CampaignRun {
                     if let Err(error) = progress.on_turn_started(event.turn_id) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
                     }
+                    if let Err(error) = context
+                        .record_progress(&progress.summary(), &gate, policy)
+                        .await
+                    {
+                        return block_report(session, &progress, policy, &gate, error.to_string());
+                    }
+                }
+                EventMsg::McpToolCallBegin(event)
+                    if event.invocation.server == GAME_SERVER_NAME
+                        && matches!(
+                            event.invocation.tool.as_str(),
+                            "click" | "drag" | "focus_click"
+                        ) =>
+                {
+                    let snapshot = gate.snapshot();
+                    if let Some(authorization) = snapshot
+                        .mutation
+                        .as_ref()
+                        .map(|mutation| &mutation.authorization)
+                        .filter(|authorization| authorization.call_id == event.call_id)
+                        && let Err(error) = context.record_mutation(authorization, policy).await
+                    {
+                        return block_report(session, &progress, policy, &gate, error.to_string());
+                    }
                 }
                 EventMsg::McpToolCallEnd(event) => {
                     if let Err(error) = observe_game_call_end(&gate, &event) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
                     }
-                    if let Err(error) = progress.observe_snapshot(&gate.snapshot(), Instant::now())
-                    {
+                    let snapshot = gate.snapshot();
+                    let durable_result = if event.invocation.server != GAME_SERVER_NAME {
+                        Ok(())
+                    } else {
+                        match event.invocation.tool.as_str() {
+                            "get_app_state" => match snapshot
+                                .observation
+                                .as_ref()
+                                .filter(|observation| observation.call_id == event.call_id)
+                            {
+                                Some(observation) => {
+                                    context.record_observation(observation, policy).await
+                                }
+                                None => Ok(()),
+                            },
+                            "click" | "drag" | "focus_click" => match snapshot
+                                .mutation
+                                .as_ref()
+                                .filter(|mutation| mutation.authorization.call_id == event.call_id)
+                                .and_then(|mutation| mutation.result)
+                            {
+                                Some(result) => {
+                                    context
+                                        .record_mutation_finished(&event.call_id, result, policy)
+                                        .await
+                                }
+                                None => Ok(()),
+                            },
+                            "wait" | "zoom" => Ok(()),
+                            _ => Ok(()),
+                        }
+                    };
+                    if let Err(error) = durable_result {
+                        return block_report(session, &progress, policy, &gate, error.to_string());
+                    }
+                    if let Err(error) = progress.observe_snapshot(&snapshot, Instant::now()) {
                         return block_report(session, &progress, policy, &gate, error.to_string());
                     }
                 }
@@ -119,17 +210,35 @@ impl CampaignRun {
                             );
                         }
                     };
+                    let accepted_plan = response.success && request.tool == "record_plan";
                     let accepted_outcome = response.success && request.tool == "report_outcome";
-                    thread
-                        .submit(Op::DynamicToolResponse {
-                            id: request.call_id,
-                            response,
-                        })
-                        .await
-                        .map_err(campaign_submit_error)?;
-                    if accepted_outcome {
+                    if accepted_plan {
                         let snapshot = gate.snapshot();
-                        let Some(outcome) = snapshot.outcome.as_ref() else {
+                        let Some(plan) = snapshot.plan.as_ref() else {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                "accepted plan response did not retain its plan".to_string(),
+                            );
+                        };
+                        if let Err(error) = context
+                            .record_plan(&progress.summary(), plan, &gate, policy)
+                            .await
+                        {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
+                            );
+                        }
+                    }
+                    let outcome_directive = if accepted_outcome {
+                        let snapshot = gate.snapshot();
+                        let Some(outcome) = snapshot.outcome else {
                             return block_report(
                                 session,
                                 &progress,
@@ -138,7 +247,7 @@ impl CampaignRun {
                                 "accepted outcome response did not retain evidence".to_string(),
                             );
                         };
-                        let directive = match reduce_accepted_outcome(&mut progress, outcome) {
+                        let directive = match reduce_accepted_outcome(&mut progress, &outcome) {
                             Ok(directive) => directive,
                             Err(error) => {
                                 return block_report(
@@ -150,6 +259,42 @@ impl CampaignRun {
                                 );
                             }
                         };
+                        if let Err(error) = context
+                            .record_outcome(
+                                &progress.summary(),
+                                &outcome,
+                                &directive,
+                                &gate,
+                                policy,
+                            )
+                            .await
+                        {
+                            return block_report(
+                                session,
+                                &progress,
+                                policy,
+                                &gate,
+                                error.to_string(),
+                            );
+                        }
+                        if matches!(
+                            directive,
+                            CampaignDirective::Complete(CampaignTerminalState::Won)
+                        ) {
+                            policy.close_mutation_lane();
+                        }
+                        Some(directive)
+                    } else {
+                        None
+                    };
+                    thread
+                        .submit(Op::DynamicToolResponse {
+                            id: request.call_id,
+                            response,
+                        })
+                        .await
+                        .map_err(campaign_submit_error)?;
+                    if let Some(directive) = outcome_directive {
                         match directive {
                             CampaignDirective::InterruptThenContinue(reason) => {
                                 if let Err(error) =
@@ -331,160 +476,9 @@ async fn submit_continuation(
     submit_turn(thread, gate, &prompt).await
 }
 
-async fn begin_safe_interrupt(
-    thread: &CodexThread,
-    progress: &mut CampaignProgress,
-    reason: ContinuationReason,
-) -> Result<(), RunnerError> {
-    progress
-        .begin_interrupt(reason, Instant::now())
-        .map_err(campaign_progress_error)?;
-    thread
-        .submit(Op::Interrupt)
-        .await
-        .map(|_| ())
-        .map_err(campaign_submit_error)
-}
-
 fn campaign_submit_error(error: impl std::fmt::Display) -> RunnerError {
     RunnerError::CampaignFailed {
         message: error.to_string(),
-    }
-}
-
-fn campaign_progress_error(error: impl std::fmt::Display) -> RunnerError {
-    RunnerError::CampaignFailed {
-        message: error.to_string(),
-    }
-}
-
-fn block_report(
-    session: &SessionConfiguredEvent,
-    progress: &CampaignProgress,
-    policy: &GameCallPolicy,
-    gate: &DecisionGate,
-    reason: String,
-) -> Result<CampaignReport, RunnerError> {
-    build_report(
-        session,
-        progress,
-        policy,
-        gate,
-        CampaignTerminalState::TerminalBlock,
-        Some(reason),
-    )
-}
-
-fn build_report(
-    session: &SessionConfiguredEvent,
-    progress: &CampaignProgress,
-    policy: &GameCallPolicy,
-    gate: &DecisionGate,
-    terminal_state: CampaignTerminalState,
-    terminal_failure: Option<String>,
-) -> Result<CampaignReport, RunnerError> {
-    let rollout_path = session
-        .rollout_path
-        .clone()
-        .ok_or(RunnerError::MissingRolloutPath)?;
-    Ok(CampaignReport::from_snapshot(
-        CampaignReportContext {
-            terminal_state,
-            thread_id: session.thread_id.to_string(),
-            summary: progress.summary(),
-            rollout_path,
-            owner_lease: policy.lease(),
-            policy_audit: policy.audit(),
-            terminal_failure,
-        },
-        gate.snapshot(),
-    ))
-}
-
-fn observe_game_call_end(
-    gate: &DecisionGate,
-    event: &McpToolCallEndEvent,
-) -> Result<(), RunnerError> {
-    if event.invocation.server != GAME_SERVER_NAME {
-        return Ok(());
-    }
-    match event.invocation.tool.as_str() {
-        "get_app_state" => {
-            let Some((reference, width, height)) = event
-                .result
-                .as_ref()
-                .ok()
-                .filter(|result| !result.is_error.unwrap_or(false))
-                .and_then(|result| result.structured_content.as_ref())
-                .and_then(full_frame_metadata)
-            else {
-                return Ok(());
-            };
-            gate.complete_full_observation(event.call_id.clone(), reference, width, height)
-                .map_err(|error| RunnerError::CampaignFailed {
-                    message: error.to_string(),
-                })?;
-        }
-        "click" | "drag" | "focus_click" => {
-            let is_authorized_call = gate
-                .snapshot()
-                .mutation
-                .is_some_and(|mutation| mutation.authorization.call_id == event.call_id);
-            if is_authorized_call {
-                let result = match &event.result {
-                    Ok(result) if result.is_error.unwrap_or(false) => MutationResult::CleanFailure,
-                    Ok(_) => MutationResult::Success,
-                    Err(_) => MutationResult::Indeterminate,
-                };
-                gate.record_mutation_result(&event.call_id, result)
-                    .map_err(|error| RunnerError::CampaignFailed {
-                        message: error.to_string(),
-                    })?;
-            }
-        }
-        "wait" | "zoom" => {}
-        _ => {}
-    }
-    Ok(())
-}
-
-fn full_frame_metadata(content: &serde_json::Value) -> Option<(String, u32, u32)> {
-    let reference = content.get("artifact_uri")?.as_str()?;
-    if reference.len() > 2 * 1024 {
-        return None;
-    }
-    let width = u32::try_from(content.get("width")?.as_u64()?).ok()?;
-    let height = u32::try_from(content.get("height")?.as_u64()?).ok()?;
-    (width > 0 && height > 0).then(|| (reference.to_string(), width, height))
-}
-
-fn reduce_accepted_outcome(
-    progress: &mut CampaignProgress,
-    outcome: &ReportedOutcome,
-) -> Result<CampaignDirective, CampaignProgressError> {
-    progress.accept_outcome(outcome)
-}
-
-fn reduce_turn_complete(
-    progress: &mut CampaignProgress,
-    snapshot: &crate::DecisionSnapshot,
-) -> Result<CampaignDirective, CampaignProgressError> {
-    match progress.complete_expected_interrupt() {
-        Ok(directive) => Ok(directive),
-        Err(CampaignProgressError::MissingPendingInterrupt) => progress.on_turn_complete(snapshot),
-        Err(error) => Err(error),
-    }
-}
-
-fn reduce_turn_aborted(
-    progress: &mut CampaignProgress,
-) -> Result<CampaignDirective, CampaignProgressError> {
-    match progress.complete_expected_interrupt() {
-        Ok(directive) => Ok(directive),
-        Err(CampaignProgressError::MissingPendingInterrupt) => Ok(CampaignDirective::Block(
-            "campaign turn aborted unexpectedly".to_string(),
-        )),
-        Err(error) => Err(error),
     }
 }
 

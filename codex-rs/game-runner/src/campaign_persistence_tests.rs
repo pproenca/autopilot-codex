@@ -170,6 +170,22 @@ async fn mutation_protocol_persists_pending_result_and_confirming_observation() 
     });
     expected.unresolved_mutation = None;
     assert_eq!(persistence.snapshot().await?, expected);
+
+    persistence
+        .confirm_observation(&ObservationEvidence {
+            generation: 3,
+            call_id: "capture-3".to_string(),
+            reference: "sha256:read-only-follow-up".to_string(),
+            width: 1051,
+            height: 820,
+        })
+        .await?;
+    expected.latest_observation = Some(DurableObservation {
+        observation_sequence: 3,
+        confirms_action_sequence: Some(1),
+        reference: "sha256:read-only-follow-up".to_string(),
+    });
+    assert_eq!(persistence.snapshot().await?, expected);
     Ok(())
 }
 
