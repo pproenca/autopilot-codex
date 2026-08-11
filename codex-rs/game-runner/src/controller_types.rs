@@ -16,6 +16,8 @@ use crate::RunnerDeployment;
 use crate::RunnerError;
 
 const MAX_FAILURE_SUMMARY_BYTES: usize = 2 * 1024;
+pub(crate) const EVENT_CAPACITY: usize = 256;
+pub(crate) const REQUEST_CAPACITY: usize = 8;
 
 pub struct ControllerConfig {
     pub deployment: RunnerDeployment,
@@ -49,6 +51,21 @@ pub enum ControllerError {
     CampaignStopped,
     #[error("campaign blocked: {failure:?}")]
     CampaignBlocked { failure: CampaignFailure },
+}
+
+pub(crate) enum ControllerRequest {
+    Command {
+        command: CampaignCommand,
+        response: tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
+    },
+    Shutdown {
+        response: tokio::sync::oneshot::Sender<()>,
+    },
+}
+
+pub(crate) struct PendingCommand {
+    pub(crate) response:
+        tokio::sync::oneshot::Sender<Result<CampaignStatus, ControllerError>>,
 }
 
 pub(crate) fn status_from_checkpoint(checkpoint: &CampaignCheckpoint) -> CampaignStatus {
