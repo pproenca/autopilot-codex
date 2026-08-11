@@ -53,6 +53,13 @@ impl HelperLauncher {
         {
             use std::os::unix::fs::PermissionsExt;
 
+            if tokio::net::UnixStream::connect(&deployment.socket_path)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+
             let helper_metadata = std::fs::metadata(&deployment.helper_app).map_err(|_| {
                 RunnerError::InvalidHelperApp {
                     path: deployment.helper_app.clone(),

@@ -74,6 +74,29 @@ async fn listening_socket_is_ready() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn existing_helper_is_reused_without_validating_bundle() {
+    let temp = tempfile::tempdir().expect("create temporary socket parent");
+    let socket = temp.path().join("helper.sock");
+    let _listener = tokio::net::UnixListener::bind(&socket).expect("bind helper socket");
+    let launcher = HelperLauncher::new(ReadinessLimits {
+        timeout: Duration::from_secs(1),
+        poll_interval: Duration::from_millis(5),
+    });
+    let deployment = RunnerDeployment {
+        helper_app: temp.path().join("missing.app"),
+        socket_path: socket,
+        target_app: "Gambonanza".to_string(),
+        codex_home: temp.path().join("codex-home"),
+    };
+
+    launcher
+        .ensure_serving(&deployment)
+        .await
+        .expect("existing helper should be reused");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn invalid_helper_bundle_is_rejected_before_launch() {
     let launcher = HelperLauncher::new(ReadinessLimits {
         timeout: Duration::from_millis(40),
