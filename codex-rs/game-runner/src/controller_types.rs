@@ -1,12 +1,84 @@
+use std::path::PathBuf;
+
 use crate::AcceptedPlan;
 use crate::AuthorizedMutation;
+use crate::CampaignCheckpoint;
+use crate::CampaignLimits;
 use crate::CampaignSummary;
+use crate::CheckpointStoreError;
+use crate::DurableCampaignState;
 use crate::MutationResult;
 use crate::ObservationEvidence;
 use crate::PauseReason;
+use crate::PersistenceError;
 use crate::ReportedOutcome;
+use crate::RunnerDeployment;
+use crate::RunnerError;
 
 const MAX_FAILURE_SUMMARY_BYTES: usize = 2 * 1024;
+
+pub struct ControllerConfig {
+    pub deployment: RunnerDeployment,
+    pub runner_executable: PathBuf,
+    pub limits: CampaignLimits,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ControllerError {
+    #[error("campaign checkpoint operation failed")]
+    Checkpoint {
+        #[source]
+        source: CheckpointStoreError,
+    },
+    #[error("campaign persistence failed")]
+    Persistence {
+        #[source]
+        source: PersistenceError,
+    },
+    #[error(transparent)]
+    Runner(#[from] RunnerError),
+    #[error(transparent)]
+    InvalidCommand(#[from] CommandTransitionError),
+    #[error("campaign controller actor closed")]
+    ActorClosed,
+    #[error("campaign at {path} must be resumed explicitly", path = path.display())]
+    CampaignRequiresResume { path: PathBuf },
+    #[error("campaign paused: {reason:?}")]
+    CampaignPaused { reason: PauseReason },
+    #[error("campaign stopped before victory")]
+    CampaignStopped,
+    #[error("campaign blocked: {failure:?}")]
+    CampaignBlocked { failure: CampaignFailure },
+}
+
+pub(crate) fn status_from_checkpoint(checkpoint: &CampaignCheckpoint) -> CampaignStatus {
+    match &checkpoint.state {
+        DurableCampaignState::Running => CampaignStatus::Running {
+            attempt_number: checkpoint.summary.attempt_number,
+        },
+        DurableCampaignState::Paused { reason } => CampaignStatus::Paused {
+            reason: reason.clone(),
+        },
+        DurableCampaignState::Won { .. } => CampaignStatus::Won {
+            summary: checkpoint.summary.clone(),
+        },
+    }
+}
+
+pub(crate) fn bounded_failure(
+    kind: CampaignFailureKind,
+    error: &impl std::fmt::Display,
+) -> CampaignFailure {
+    let mut summary = error.to_string();
+    if summary.len() > MAX_FAILURE_SUMMARY_BYTES {
+        let mut boundary = MAX_FAILURE_SUMMARY_BYTES;
+        while !summary.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        summary.truncate(boundary);
+    }
+    CampaignFailure::new(kind, summary).expect("failure summary was bounded")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CampaignCommand {
